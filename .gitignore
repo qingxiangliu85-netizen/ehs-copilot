@@ -1,0 +1,52 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python caches, tests and build output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.streamlit/*
+!.streamlit/config.toml
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Runtime and debug output
+*.log
+*.tmp
+*.temp
+*.bak
+tmp/
+
+# Local uploads, SDS files and generated indexes
+uploads/
+data/demo_sds/*.pdf
+data/demo_sds/*.PDF
+!data/demo_sds/EHS_Copilot_Demo_Synthetic_SDS.pdf
+data/faiss_index/*
+!data/faiss_index/.gitkeep
+*.faiss
+*.pkl
