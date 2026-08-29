@@ -2,6 +2,8 @@
 
 > AI × EHS 危化品 SDS 智能检索助手 · v0.1
 
+Live Demo: <https://ehs-copilot-zgiwyfrlcygmh58qcjp6lb.streamlit.app/>
+
 EHS Copilot 是一个可免费运行的 SDS 语义检索 Demo。无需 API Key，页面首次打开时会自动加载仓库自带的中英双语 Synthetic SDS 并建立知识库；访客也可以上传自己的多份可复制文本 PDF。自然语言查询结果包含从检索文本中提取的摘要、来源文件、PDF 页码和原文证据。
 
 > **Safety Notice**
