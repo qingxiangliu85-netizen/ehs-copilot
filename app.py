@@ -1,14 +1,29 @@
-"""Streamlit entry point for EHS Copilot v0.1."""
+"""Streamlit entry point for EHS Copilot."""
 
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from pathlib import Path
 
 import streamlit as st
 
 from config import NOT_FOUND_MESSAGE, SAFETY_DISCLAIMER
+from dashboard import render_dashboard_page
+from hazards import (
+    HAZARD_STATUSES,
+    HAZARD_TYPES,
+    RISK_LEVELS as HAZARD_RISK_LEVELS,
+    calculate_hazard_summary,
+    create_demo_hazard_records,
+    create_hazard_record,
+    delete_hazard_record,
+    hazards_to_csv,
+    next_hazard_id,
+    update_hazard_record,
+)
 from llm import LLMConfigurationError, LLMResponseError, is_llm_configured
+from jsa import calculate_risk, records_to_csv
 from rag import (
     SDSProcessingError,
     answer_question,
@@ -44,7 +59,7 @@ class LocalDemoPDF:
 
 
 st.set_page_config(
-    page_title="EHS Copilot｜AI-powered SDS Safety Assistant",
+    page_title="EHS Copilot｜AI辅助EHS风险与危化品管理平台",
     page_icon="🧪",
     layout="wide",
 )
@@ -61,10 +76,14 @@ def initialize_state() -> None:
         "knowledge_base_mode": None,
         "auto_demo_attempted": False,
         "auto_demo_error": None,
+        "jsa_records": [],
+        "hazard_notice": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+    if "hazard_records" not in st.session_state:
+        st.session_state.hazard_records = create_demo_hazard_records()
 
 
 def build_evidence(documents: tuple[object, ...]) -> list[dict[str, object]]:
@@ -230,7 +249,407 @@ def build_retrieval_response(vector_store: object, question: str) -> dict[str, o
     }
 
 
+def render_risk_badge(score: int, level: str, label: str) -> None:
+    st.metric(label, f"{score} · {level}")
+
+
+def render_jsa_page() -> None:
+    """Render the minimal, session-only JSA assessment workflow."""
+    st.title("JSA风险评估")
+    st.caption("Job Safety Analysis · 作业安全分析")
+    st.info(
+        "将作业步骤、危害与控制措施逐条加入当前会话，系统自动计算初始风险和残余风险。"
+    )
+    st.warning(
+        "风险评估结果仅作求职作品演示，实际风险等级应依据企业制度和现场评估确定。"
+    )
+    st.caption("下方 HF酸洗内容为模拟演示数据，不作为真实作业SOP或现场操作依据。")
+    st.caption(
+        "风险分级：1–4 低风险｜5–9 中风险｜10–16 高风险｜17–25 重大风险"
+    )
+
+    with st.form("jsa_entry_form", clear_on_submit=False):
+        job_name = st.text_input("作业名称", value="HF酸洗（模拟演示）")
+        job_step = st.text_area(
+            "作业步骤",
+            value="将待处理样件放入模拟酸洗槽并完成清洗",
+            height=80,
+        )
+        hazard = st.text_area(
+            "危害因素",
+            value="HF飞溅、酸雾吸入、容器泄漏",
+            height=80,
+        )
+        consequence = st.text_area(
+            "可能后果",
+            value="皮肤或眼睛化学灼伤、吸入伤害",
+            height=80,
+        )
+
+        initial_columns = st.columns(2)
+        likelihood = initial_columns[0].select_slider(
+            "可能性 L（1–5）", options=range(1, 6), value=4
+        )
+        severity = initial_columns[1].select_slider(
+            "严重度 S（1–5）", options=range(1, 6), value=5
+        )
+        initial_score, initial_level = calculate_risk(likelihood, severity)
+        render_risk_badge(initial_score, initial_level, "初始风险 R=L×S")
+
+        existing_controls = st.text_area(
+            "现有控制措施",
+            value="模拟措施：局部排风、耐酸碱手套、护目镜与面屏、应急冲淋设施",
+            height=90,
+        )
+        suggested_controls = st.text_area(
+            "建议控制措施",
+            value="模拟建议：密闭加料、液位监测、双人复核，并按企业制度完善现场应急措施",
+            height=90,
+        )
+
+        residual_columns = st.columns(2)
+        residual_likelihood = residual_columns[0].select_slider(
+            "控制后可能性 L（1–5）", options=range(1, 6), value=2
+        )
+        residual_severity = residual_columns[1].select_slider(
+            "控制后严重度 S（1–5）", options=range(1, 6), value=5
+        )
+        residual_score, residual_level = calculate_risk(
+            residual_likelihood, residual_severity
+        )
+        render_risk_badge(residual_score, residual_level, "残余风险 R=L×S")
+
+        submitted = st.form_submit_button(
+            "添加到JSA", type="primary", use_container_width=True
+        )
+
+    if submitted:
+        required_fields = (job_name, job_step, hazard, consequence)
+        if not all(value.strip() for value in required_fields):
+            st.error("请填写作业名称、作业步骤、危害因素和可能后果。")
+        else:
+            st.session_state.jsa_records.append(
+                {
+                    "作业名称": job_name.strip(),
+                    "作业步骤": job_step.strip(),
+                    "危害因素": hazard.strip(),
+                    "可能后果": consequence.strip(),
+                    "可能性L": likelihood,
+                    "严重度S": severity,
+                    "风险值R": initial_score,
+                    "风险等级": initial_level,
+                    "现有控制措施": existing_controls.strip(),
+                    "建议控制措施": suggested_controls.strip(),
+                    "控制后可能性L": residual_likelihood,
+                    "控制后严重度S": residual_severity,
+                    "残余风险R": residual_score,
+                    "残余风险等级": residual_level,
+                }
+            )
+            st.success("已添加到当前会话的JSA表格。")
+
+    st.divider()
+    st.subheader("当前会话JSA表格")
+    records = st.session_state.jsa_records
+    if not records:
+        st.caption("尚未添加记录。可连续添加多个作业步骤。")
+    else:
+        st.dataframe(records, hide_index=True, use_container_width=True)
+        action_columns = st.columns((2, 1, 1))
+        delete_index = action_columns[0].selectbox(
+            "选择要删除的记录",
+            options=range(len(records)),
+            format_func=lambda index: (
+                f"#{index + 1} {records[index]['作业名称']}｜"
+                f"{records[index]['作业步骤']}"
+            ),
+        )
+        if action_columns[1].button("删除所选", use_container_width=True):
+            records.pop(delete_index)
+            st.rerun()
+        if action_columns[2].button("清空记录", use_container_width=True):
+            records.clear()
+            st.rerun()
+
+        st.download_button(
+            "下载JSA CSV",
+            data=records_to_csv(records),
+            file_name="EHS_Copilot_JSA.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    st.divider()
+    st.caption(SAFETY_DISCLAIMER)
+
+
+def render_hazard_page() -> None:
+    """Render session-only hazard tracking and corrective-action management."""
+    st.title("隐患整改管理")
+    st.caption("Hazard Tracking · Corrective Action Management")
+    st.info(
+        "记录隐患、责任人、整改期限与整改状态，并在当前会话中完成维护和导出。"
+    )
+    st.warning(
+        "本工具为EHS数字化原型/求职展示项目，示例数据仅用于功能演示，"
+        "不替代企业制度、现场风险评估及专业人员判断。"
+    )
+    st.caption("默认案例均标注为“模拟数据 / Demo，不代表真实企业记录”。")
+
+    notice = st.session_state.pop("hazard_notice", None)
+    if notice:
+        st.success(notice)
+
+    records = st.session_state.hazard_records
+    summary = calculate_hazard_summary(records)
+    metric_columns = st.columns(5)
+    metric_columns[0].metric("隐患总数", summary["total"])
+    metric_columns[1].metric("待整改", summary["pending"])
+    metric_columns[2].metric("整改中", summary["in_progress"])
+    metric_columns[3].metric("已关闭", summary["closed"])
+    metric_columns[4].metric("整改完成率", f"{summary['completion_rate']:.1f}%")
+    st.caption(
+        "风险等级分布："
+        + "｜".join(
+            f"{level} {summary['risk_distribution'][level]}"
+            for level in HAZARD_RISK_LEVELS
+        )
+    )
+
+    add_tab, manage_tab = st.tabs(("新增隐患", "查看与维护"))
+
+    with add_tab:
+        with st.form("hazard_create_form", clear_on_submit=False):
+            first_row = st.columns((1, 1, 1))
+            hazard_id = first_row[0].text_input(
+                "隐患编号", value=next_hazard_id(records)
+            )
+            hazard_type = first_row[1].selectbox("隐患类型", HAZARD_TYPES)
+            risk_level = first_row[2].selectbox(
+                "风险等级", HAZARD_RISK_LEVELS, index=1
+            )
+            description = st.text_area(
+                "隐患描述", placeholder="请客观描述发现的问题与所在场景。", height=90
+            )
+            second_row = st.columns((1, 1, 1))
+            owner = second_row[0].text_input("责任人", placeholder="姓名或责任岗位")
+            found_on = second_row[1].date_input("发现日期", value=date.today())
+            due_on = second_row[2].date_input(
+                "整改期限", value=date.today() + timedelta(days=14)
+            )
+            corrective_action = st.text_area(
+                "整改措施", placeholder="填写拟采取或已采取的整改措施。", height=100
+            )
+            status = st.selectbox("状态", HAZARD_STATUSES)
+            submitted = st.form_submit_button(
+                "新增隐患记录", type="primary", use_container_width=True
+            )
+
+        if submitted:
+            try:
+                record = create_hazard_record(
+                    hazard_id=hazard_id,
+                    description=description,
+                    hazard_type=hazard_type,
+                    risk_level=risk_level,
+                    owner=owner,
+                    found_on=found_on,
+                    due_on=due_on,
+                    corrective_action=corrective_action,
+                    status=status,
+                    existing_ids=(
+                        str(item.get("隐患编号", "")) for item in records
+                    ),
+                )
+                records.append(record)
+                st.session_state.hazard_notice = f"已新增隐患记录：{record['隐患编号']}"
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+    with manage_tab:
+        st.subheader("全部隐患")
+        if not records:
+            st.caption("当前会话暂无隐患记录，可在“新增隐患”中创建。")
+        else:
+            st.dataframe(records, hide_index=True, use_container_width=True)
+            selected_id = st.selectbox(
+                "选择要维护的隐患",
+                options=[str(record["隐患编号"]) for record in records],
+                format_func=lambda value: next(
+                    f"{value}｜{record['隐患描述']}"
+                    for record in records
+                    if record["隐患编号"] == value
+                ),
+                key="hazard_selected_id",
+            )
+            selected_record = next(
+                record for record in records if record["隐患编号"] == selected_id
+            )
+
+            st.markdown("#### 快速更新整改状态")
+            status_columns = st.columns((2, 1))
+            quick_status = status_columns[0].selectbox(
+                "整改状态",
+                HAZARD_STATUSES,
+                index=HAZARD_STATUSES.index(str(selected_record["状态"])),
+                key=f"hazard_quick_status_{selected_id}",
+            )
+            if status_columns[1].button(
+                "更新状态", type="primary", use_container_width=True
+            ):
+                update_hazard_record(records, selected_id, {"状态": quick_status})
+                st.session_state.hazard_notice = f"已更新 {selected_id} 的整改状态。"
+                st.rerun()
+
+            st.markdown("#### 修改隐患记录")
+            with st.form(f"hazard_edit_form_{selected_id}"):
+                edit_row = st.columns((1, 1))
+                edit_type = edit_row[0].selectbox(
+                    "隐患类型",
+                    HAZARD_TYPES,
+                    index=HAZARD_TYPES.index(str(selected_record["隐患类型"])),
+                    key=f"hazard_edit_type_{selected_id}",
+                )
+                edit_risk = edit_row[1].selectbox(
+                    "风险等级",
+                    HAZARD_RISK_LEVELS,
+                    index=HAZARD_RISK_LEVELS.index(
+                        str(selected_record["风险等级"])
+                    ),
+                    key=f"hazard_edit_risk_{selected_id}",
+                )
+                edit_description = st.text_area(
+                    "隐患描述",
+                    value=str(selected_record["隐患描述"]),
+                    height=90,
+                    key=f"hazard_edit_description_{selected_id}",
+                )
+                edit_dates = st.columns((1, 1, 1))
+                edit_owner = edit_dates[0].text_input(
+                    "责任人",
+                    value=str(selected_record["责任人"]),
+                    key=f"hazard_edit_owner_{selected_id}",
+                )
+                edit_found_on = edit_dates[1].date_input(
+                    "发现日期",
+                    value=date.fromisoformat(str(selected_record["发现日期"])),
+                    key=f"hazard_edit_found_{selected_id}",
+                )
+                edit_due_on = edit_dates[2].date_input(
+                    "整改期限",
+                    value=date.fromisoformat(str(selected_record["整改期限"])),
+                    key=f"hazard_edit_due_{selected_id}",
+                )
+                edit_action = st.text_area(
+                    "整改措施",
+                    value=str(selected_record["整改措施"]),
+                    height=100,
+                    key=f"hazard_edit_action_{selected_id}",
+                )
+                edit_status = st.selectbox(
+                    "状态",
+                    HAZARD_STATUSES,
+                    index=HAZARD_STATUSES.index(str(selected_record["状态"])),
+                    key=f"hazard_edit_status_{selected_id}",
+                )
+                edit_submitted = st.form_submit_button(
+                    "保存修改", use_container_width=True
+                )
+
+            if edit_submitted:
+                try:
+                    update_hazard_record(
+                        records,
+                        selected_id,
+                        {
+                            "隐患描述": edit_description,
+                            "隐患类型": edit_type,
+                            "风险等级": edit_risk,
+                            "责任人": edit_owner,
+                            "发现日期": edit_found_on,
+                            "整改期限": edit_due_on,
+                            "整改措施": edit_action,
+                            "状态": edit_status,
+                        },
+                    )
+                    st.session_state.hazard_notice = f"已保存隐患记录：{selected_id}"
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
+            st.markdown("#### 删除与导出")
+            delete_column, clear_column = st.columns(2)
+            if delete_column.button(
+                "删除当前记录", use_container_width=True, key="hazard_delete_selected"
+            ):
+                delete_hazard_record(records, selected_id)
+                st.session_state.hazard_notice = f"已删除隐患记录：{selected_id}"
+                st.rerun()
+
+            confirm_clear = clear_column.checkbox(
+                "确认清空全部记录", key="hazard_confirm_clear"
+            )
+            if clear_column.button(
+                "清空全部记录",
+                use_container_width=True,
+                disabled=not confirm_clear,
+                key="hazard_clear_all",
+            ):
+                records.clear()
+                st.session_state.hazard_notice = "已清空当前会话的全部隐患记录。"
+                st.rerun()
+
+            st.download_button(
+                "下载隐患记录 CSV",
+                data=hazards_to_csv(records),
+                file_name="EHS_Copilot_Hazard_Records.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    st.divider()
+    st.caption(
+        "本工具为EHS数字化原型/求职展示项目，示例数据仅用于功能演示，"
+        "不替代企业制度、现场风险评估及专业人员判断。"
+    )
+
+
 initialize_state()
+with st.sidebar:
+    st.subheader("功能导航")
+    selected_page = st.radio(
+        "功能导航",
+        ("EHS Dashboard", "SDS智能检索", "JSA风险评估", "隐患整改管理"),
+        index=1,
+        label_visibility="collapsed",
+    )
+
+if selected_page == "EHS Dashboard":
+    render_dashboard_page(
+        st.session_state.jsa_records,
+        st.session_state.hazard_records,
+    )
+    st.stop()
+
+if selected_page == "JSA风险评估":
+    with st.sidebar:
+        st.divider()
+        st.warning(
+            "JSA结果仅作演示；实际风险等级须依据企业制度和现场评估确定。"
+        )
+    render_jsa_page()
+    st.stop()
+
+if selected_page == "隐患整改管理":
+    with st.sidebar:
+        st.divider()
+        st.warning(
+            "示例数据仅用于功能演示；实际隐患整改应依据企业制度和现场要求执行。"
+        )
+    render_hazard_page()
+    st.stop()
+
 llm_available = is_llm_configured()
 
 if (
@@ -252,7 +671,7 @@ with st.sidebar:
         "上传一个或多个 SDS PDF",
         type=["pdf"],
         accept_multiple_files=True,
-        help="v0.1 仅解析包含可复制文字的 PDF，暂不支持扫描件 OCR。",
+        help="当前版本仅解析包含可复制文字的 PDF，暂不支持扫描件 OCR。",
     )
 
     if uploaded_files:
@@ -295,7 +714,8 @@ with st.sidebar:
     st.warning(SAFETY_DISCLAIMER)
 
 st.title("EHS Copilot")
-st.subheader("AI × EHS 危化品 SDS 智能检索助手")
+st.subheader("AI辅助EHS风险与危化品管理平台")
+st.markdown("### SDS智能检索")
 st.markdown(
     "**基于语义检索快速定位危险性、PPE、储存、急救、泄漏及消防信息，"
     "并提供原始 SDS 页码与证据追溯。**"
