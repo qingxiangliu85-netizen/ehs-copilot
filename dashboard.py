@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from hazards import HAZARD_STATUSES, HAZARD_TYPES, RISK_LEVELS, calculate_hazard_summary
+from jsa import calculate_jsa_record_risks
 
 
 DASHBOARD_RISK_LEVELS = ("低", "中", "高", "重大")
@@ -29,11 +30,23 @@ def _normalise_risk_level(value: object) -> str:
 
 
 def _jsa_final_risk_level(record: Mapping[str, object]) -> str:
-    """Prefer residual risk and fall back to the initial JSA risk level."""
-    residual = _normalise_risk_level(record.get("残余风险等级", ""))
-    if residual:
-        return residual
-    return _normalise_risk_level(record.get("风险等级", ""))
+    """Recalculate and return the record's residual/final risk level."""
+    try:
+        risks = calculate_jsa_record_risks(record)
+        return _normalise_risk_level(risks["残余风险等级"])
+    except (KeyError, TypeError, ValueError):
+        residual = _normalise_risk_level(record.get("残余风险等级", ""))
+        if residual:
+            return residual
+        return _normalise_risk_level(record.get("风险等级", ""))
+
+
+def _jsa_final_risk_score(record: Mapping[str, object]) -> object:
+    """Recalculate the residual score, with fallback for legacy records."""
+    try:
+        return calculate_jsa_record_risks(record)["残余风险R"]
+    except (KeyError, TypeError, ValueError):
+        return record.get("残余风险R", record.get("风险值R", ""))
 
 
 def get_jsa_risk_distribution(
@@ -99,9 +112,7 @@ def get_priority_items(
                     "作业名称": record.get("作业名称", ""),
                     "作业步骤": record.get("作业步骤", ""),
                     "最终风险等级": final_level,
-                    "最终风险值R": record.get(
-                        "残余风险R", record.get("风险值R", "")
-                    ),
+                    "最终风险值R": _jsa_final_risk_score(record),
                 }
             )
 
@@ -136,7 +147,7 @@ def render_dashboard_page(
     hazard_distributions = get_hazard_distributions(hazard_records)
     priority = get_priority_items(jsa_records, hazard_records)
 
-    st.title("EHS Dashboard")
+    st.title("EHS仪表盘")
     st.caption("汇总JSA风险评估与隐患整改数据，用于演示EHS风险识别和整改闭环管理。")
     st.info(
         "本页面数据来自JSA及隐患整改模块的模拟/演示记录，"
@@ -192,4 +203,3 @@ def render_dashboard_page(
             )
         else:
             st.caption("当前无高/重大且未关闭隐患。")
-

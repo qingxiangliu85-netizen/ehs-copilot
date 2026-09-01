@@ -20,22 +20,34 @@ class DashboardTests(unittest.TestCase):
                 "作业步骤": "步骤A",
                 "风险等级": "重大风险",
                 "风险值R": 20,
+                "可能性L": 4,
+                "严重度S": 5,
                 "残余风险等级": "高风险",
                 "残余风险R": 10,
+                "控制后可能性L": 2,
+                "控制后严重度S": 5,
             },
             {
                 "作业名称": "模拟作业B",
                 "作业步骤": "步骤B",
                 "风险等级": "高风险",
                 "风险值R": 12,
+                "可能性L": 3,
+                "严重度S": 4,
                 "残余风险等级": "中风险",
                 "残余风险R": 6,
+                "控制后可能性L": 2,
+                "控制后严重度S": 3,
             },
             {
                 "作业名称": "模拟作业C",
                 "作业步骤": "步骤C",
                 "风险等级": "重大风险",
                 "风险值R": 20,
+                "可能性L": 4,
+                "严重度S": 5,
+                "控制后可能性L": 4,
+                "控制后严重度S": 5,
             },
         ]
         self.hazard_records = [
@@ -70,6 +82,27 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(len(priority["jsa"]), 2)
         self.assertEqual(len(priority["hazards"]), 2)
         self.assertEqual(priority["jsa"][0]["最终风险等级"], "高")
+        self.assertEqual(priority["jsa"][0]["最终风险值R"], 10)
+
+    def test_dashboard_recalculates_stale_record_scores_from_inputs(self) -> None:
+        stale_record = {
+            "作业名称": "模拟作业",
+            "作业步骤": "模拟步骤",
+            "可能性L": 4,
+            "严重度S": 5,
+            "风险值R": 15,
+            "风险等级": "高风险",
+            "控制后可能性L": 2,
+            "控制后严重度S": 5,
+            "残余风险R": 8,
+            "残余风险等级": "中风险",
+        }
+        self.assertEqual(
+            get_jsa_risk_distribution([stale_record]),
+            {"低": 0, "中": 0, "高": 1, "重大": 0},
+        )
+        priority = get_priority_items([stale_record], [])
+        self.assertEqual(priority["jsa"][0]["最终风险值R"], 10)
 
     def test_empty_data_is_safe(self) -> None:
         metrics = calculate_dashboard_metrics([], [])
@@ -82,4 +115,3 @@ class DashboardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

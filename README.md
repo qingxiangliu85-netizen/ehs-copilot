@@ -36,7 +36,7 @@
 - 自动计算整改完成率并支持CSV导出；
 - 内置8条明确标注的模拟EHS隐患数据用于功能演示。
 
-### 4. EHS Dashboard
+### 4. EHS仪表盘
 
 - 汇总JSA高/重大风险数量、JSA记录总数和隐患总数；
 - 显示待整改、已关闭数量及整改完成率；
@@ -99,7 +99,7 @@ OPENAI_MODEL=gpt-4o-mini
 
 ## 测试
 
-当前自动化测试覆盖SDS/RAG、Demo体验、JSA、隐患整改与Dashboard计算：**21/21 passed**。
+当前自动化测试覆盖SDS/RAG、Demo体验、JSA、隐患整改与仪表盘计算：**24/24 passed**。
 
 ```powershell
 python -m unittest discover -s tests -p "test_*.py" -v

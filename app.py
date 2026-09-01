@@ -23,7 +23,7 @@ from hazards import (
     update_hazard_record,
 )
 from llm import LLMConfigurationError, LLMResponseError, is_llm_configured
-from jsa import calculate_risk, records_to_csv
+from jsa import calculate_risk, create_jsa_record, records_to_csv
 from rag import (
     SDSProcessingError,
     answer_question,
@@ -268,60 +268,63 @@ def render_jsa_page() -> None:
         "风险分级：1–4 低风险｜5–9 中风险｜10–16 高风险｜17–25 重大风险"
     )
 
-    with st.form("jsa_entry_form", clear_on_submit=False):
-        job_name = st.text_input("作业名称", value="HF酸洗（模拟演示）")
-        job_step = st.text_area(
-            "作业步骤",
-            value="将待处理样件放入模拟酸洗槽并完成清洗",
-            height=80,
-        )
-        hazard = st.text_area(
-            "危害因素",
-            value="HF飞溅、酸雾吸入、容器泄漏",
-            height=80,
-        )
-        consequence = st.text_area(
-            "可能后果",
-            value="皮肤或眼睛化学灼伤、吸入伤害",
-            height=80,
-        )
+    job_name = st.text_input("作业名称", value="HF酸洗（模拟演示）")
+    job_step = st.text_area(
+        "作业步骤",
+        value="将待处理样件放入模拟酸洗槽并完成清洗",
+        height=80,
+    )
+    hazard = st.text_area(
+        "危害因素",
+        value="HF飞溅、酸雾吸入、容器泄漏",
+        height=80,
+    )
+    consequence = st.text_area(
+        "可能后果",
+        value="皮肤或眼睛化学灼伤、吸入伤害",
+        height=80,
+    )
 
-        initial_columns = st.columns(2)
-        likelihood = initial_columns[0].select_slider(
-            "可能性 L（1–5）", options=range(1, 6), value=4
-        )
-        severity = initial_columns[1].select_slider(
-            "严重度 S（1–5）", options=range(1, 6), value=5
-        )
-        initial_score, initial_level = calculate_risk(likelihood, severity)
-        render_risk_badge(initial_score, initial_level, "初始风险 R=L×S")
+    initial_columns = st.columns(2)
+    likelihood = initial_columns[0].select_slider(
+        "可能性 L（1–5）", options=range(1, 6), value=4, key="jsa_initial_l"
+    )
+    severity = initial_columns[1].select_slider(
+        "严重度 S（1–5）", options=range(1, 6), value=5, key="jsa_initial_s"
+    )
+    initial_score, initial_level = calculate_risk(likelihood, severity)
+    render_risk_badge(initial_score, initial_level, "初始风险 R=L×S")
 
-        existing_controls = st.text_area(
-            "现有控制措施",
-            value="模拟措施：局部排风、耐酸碱手套、护目镜与面屏、应急冲淋设施",
-            height=90,
-        )
-        suggested_controls = st.text_area(
-            "建议控制措施",
-            value="模拟建议：密闭加料、液位监测、双人复核，并按企业制度完善现场应急措施",
-            height=90,
-        )
+    existing_controls = st.text_area(
+        "现有控制措施",
+        value="模拟措施：局部排风、耐酸碱手套、护目镜与面屏、应急冲淋设施",
+        height=90,
+    )
+    suggested_controls = st.text_area(
+        "建议控制措施",
+        value="模拟建议：密闭加料、液位监测、双人复核，并按企业制度完善现场应急措施",
+        height=90,
+    )
 
-        residual_columns = st.columns(2)
-        residual_likelihood = residual_columns[0].select_slider(
-            "控制后可能性 L（1–5）", options=range(1, 6), value=2
-        )
-        residual_severity = residual_columns[1].select_slider(
-            "控制后严重度 S（1–5）", options=range(1, 6), value=5
-        )
-        residual_score, residual_level = calculate_risk(
-            residual_likelihood, residual_severity
-        )
-        render_risk_badge(residual_score, residual_level, "残余风险 R=L×S")
+    residual_columns = st.columns(2)
+    residual_likelihood = residual_columns[0].select_slider(
+        "控制后可能性 L（1–5）",
+        options=range(1, 6),
+        value=2,
+        key="jsa_residual_l",
+    )
+    residual_severity = residual_columns[1].select_slider(
+        "控制后严重度 S（1–5）",
+        options=range(1, 6),
+        value=5,
+        key="jsa_residual_s",
+    )
+    residual_score, residual_level = calculate_risk(
+        residual_likelihood, residual_severity
+    )
+    render_risk_badge(residual_score, residual_level, "残余风险 R=L×S")
 
-        submitted = st.form_submit_button(
-            "添加到JSA", type="primary", use_container_width=True
-        )
+    submitted = st.button("添加到JSA", type="primary", use_container_width=True)
 
     if submitted:
         required_fields = (job_name, job_step, hazard, consequence)
@@ -329,22 +332,18 @@ def render_jsa_page() -> None:
             st.error("请填写作业名称、作业步骤、危害因素和可能后果。")
         else:
             st.session_state.jsa_records.append(
-                {
-                    "作业名称": job_name.strip(),
-                    "作业步骤": job_step.strip(),
-                    "危害因素": hazard.strip(),
-                    "可能后果": consequence.strip(),
-                    "可能性L": likelihood,
-                    "严重度S": severity,
-                    "风险值R": initial_score,
-                    "风险等级": initial_level,
-                    "现有控制措施": existing_controls.strip(),
-                    "建议控制措施": suggested_controls.strip(),
-                    "控制后可能性L": residual_likelihood,
-                    "控制后严重度S": residual_severity,
-                    "残余风险R": residual_score,
-                    "残余风险等级": residual_level,
-                }
+                create_jsa_record(
+                    job_name=job_name,
+                    job_step=job_step,
+                    hazard=hazard,
+                    consequence=consequence,
+                    likelihood=likelihood,
+                    severity=severity,
+                    existing_controls=existing_controls,
+                    suggested_controls=suggested_controls,
+                    residual_likelihood=residual_likelihood,
+                    residual_severity=residual_severity,
+                )
             )
             st.success("已添加到当前会话的JSA表格。")
 
@@ -620,12 +619,12 @@ with st.sidebar:
     st.subheader("功能导航")
     selected_page = st.radio(
         "功能导航",
-        ("EHS Dashboard", "SDS智能检索", "JSA风险评估", "隐患整改管理"),
+        ("EHS仪表盘", "SDS智能检索", "JSA风险评估", "隐患整改管理"),
         index=1,
         label_visibility="collapsed",
     )
 
-if selected_page == "EHS Dashboard":
+if selected_page == "EHS仪表盘":
     render_dashboard_page(
         st.session_state.jsa_records,
         st.session_state.hazard_records,
