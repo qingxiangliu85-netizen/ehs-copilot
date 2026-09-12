@@ -31,6 +31,7 @@ from rag import (
     collect_sources,
     retrieve_documents,
 )
+from workbench import render_job_detail_page, render_workbench_page
 from workflow.ui import render_workflow_page
 
 
@@ -79,6 +80,9 @@ def initialize_state() -> None:
         "auto_demo_error": None,
         "jsa_records": [],
         "hazard_notice": None,
+        "job_records": [],
+        "active_job_id": None,
+        "new_job_open": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -416,6 +420,34 @@ def render_hazard_page() -> None:
         )
     )
 
+    if records:
+        st.markdown("#### 整改闭环状态")
+        today = date.today()
+        status_rows = []
+        for record in records:
+            due_text = str(record.get("整改期限", "")).strip()
+            overdue = False
+            if due_text and str(record.get("状态", "")) != "已关闭":
+                try:
+                    overdue = date.fromisoformat(due_text) < today
+                except ValueError:
+                    overdue = False
+            evidence_count = len(list(record.get("rectification_evidence") or ()))
+            status_rows.append(
+                {
+                    "隐患编号": record.get("隐患编号", ""),
+                    "问题": record.get("隐患描述", ""),
+                    "风险等级": record.get("风险等级", ""),
+                    "责任人": record.get("责任人", ""),
+                    "截止时间": due_text,
+                    "当前状态": record.get("状态", ""),
+                    "是否逾期": "⚠️ 是" if overdue else "否",
+                    "整改证据": f"✅ {evidence_count} 条" if evidence_count else "—",
+                    "复查人": record.get("reviewer", ""),
+                }
+            )
+        st.dataframe(status_rows, hide_index=True, use_container_width=True)
+
     add_tab, manage_tab = st.tabs(("新增隐患", "查看与维护"))
 
     with add_tab:
@@ -620,34 +652,38 @@ with st.sidebar:
     st.subheader("功能导航")
     selected_page = st.radio(
         "功能导航",
-        (
-            "EHS仪表盘",
-            "SDS智能检索",
-            "JSA风险评估",
-            "隐患整改管理",
-            "AI工作流助手",
-        ),
-        index=1,
+        ("作业闭环", "隐患整改", "EHS驾驶舱", "工具箱"),
+        index=0,
         label_visibility="collapsed",
     )
+    toolbox_page = ""
+    if selected_page == "工具箱":
+        toolbox_page = st.selectbox(
+            "工具箱",
+            ("SDS资料库", "JSA工具", "AI工作流控制台"),
+        )
 
-if selected_page == "EHS仪表盘":
-    render_dashboard_page(
-        st.session_state.jsa_records,
-        st.session_state.hazard_records,
-    )
-    st.stop()
-
-if selected_page == "JSA风险评估":
+if selected_page == "作业闭环":
     with st.sidebar:
         st.divider()
-        st.warning(
-            "JSA结果仅作演示；实际风险等级须依据企业制度和现场评估确定。"
+        st.caption(
+            "以作业单为主线的危化品作业安全审查与整改闭环。"
+            "公开安全证据与 SDS 证据严格分开。"
         )
-    render_jsa_page()
+    if st.session_state.get("active_job_id"):
+        render_job_detail_page(
+            st.session_state.job_records,
+            st.session_state.hazard_records,
+            vector_store=st.session_state.vector_store,
+        )
+    else:
+        render_workbench_page(
+            st.session_state.job_records,
+            st.session_state.hazard_records,
+        )
     st.stop()
 
-if selected_page == "隐患整改管理":
+if selected_page == "隐患整改":
     with st.sidebar:
         st.divider()
         st.warning(
@@ -656,7 +692,15 @@ if selected_page == "隐患整改管理":
     render_hazard_page()
     st.stop()
 
-if selected_page == "AI工作流助手":
+if selected_page == "EHS驾驶舱":
+    render_dashboard_page(
+        st.session_state.jsa_records,
+        st.session_state.hazard_records,
+        st.session_state.job_records,
+    )
+    st.stop()
+
+if toolbox_page == "AI工作流控制台":
     with st.sidebar:
         st.divider()
         st.warning(
@@ -682,6 +726,17 @@ if selected_page == "AI工作流助手":
         loaded_files=tuple(st.session_state.loaded_files),
     )
     st.stop()
+
+if toolbox_page == "JSA工具":
+    with st.sidebar:
+        st.divider()
+        st.warning(
+            "JSA结果仅作演示；实际风险等级须依据企业制度和现场评估确定。"
+        )
+    render_jsa_page()
+    st.stop()
+
+# 工具箱 → SDS资料库（以下为 SDS 检索页）
 
 llm_available = is_llm_configured()
 
@@ -746,8 +801,8 @@ with st.sidebar:
     st.divider()
     st.warning(SAFETY_DISCLAIMER)
 
-st.title("EHS Copilot")
-st.subheader("AI辅助EHS风险与危化品管理平台")
+st.title("SDS资料库")
+st.caption("工具箱 / SDS资料库｜上传并构建自己的 SDS 知识库")
 st.markdown("### SDS智能检索")
 st.markdown(
     "**基于语义检索快速定位危险性、PPE、储存、急救、泄漏及消防信息，"

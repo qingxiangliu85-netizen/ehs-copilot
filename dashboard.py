@@ -103,12 +103,25 @@ def count_overdue_hazards(
     return count
 
 
+def _job_final_risk_level(job: Mapping[str, object]) -> str:
+    """Return the EHS-confirmed residual risk level of one job, if any."""
+    confirmation = dict(job.get("jsa_confirmation") or {})
+    final = dict(confirmation.get("final") or {})
+    return _normalise_risk_level(final.get("残余风险等级", "")) or (
+        _normalise_risk_level(final.get("风险等级", ""))
+    )
+
+
 def get_job_metrics(
     job_records: Iterable[Mapping[str, object]],
 ) -> dict[str, int | float]:
     """Return the job-lifecycle metrics required by the dashboard."""
-    summary = job_summary(job_records)
+    rows = list(job_records)
+    summary = job_summary(rows)
     distribution = dict(summary["status_distribution"])
+    high_risk = sum(
+        1 for job in rows if _job_final_risk_level(job) in {"高", "重大"}
+    )
     return {
         "job_total": int(summary["total"]),
         "job_active": int(summary["active"]),
@@ -117,6 +130,7 @@ def get_job_metrics(
         "job_awaiting_review": int(summary["awaiting_review"]),
         "job_closed": int(summary["closed"]),
         "job_rejected": int(summary["rejected"]),
+        "job_high_risk": high_risk,
         "job_completion_rate": float(summary["completion_rate"]),
     }
 
@@ -193,28 +207,46 @@ def _distribution_frame(distribution: Mapping[str, int]) -> pd.DataFrame:
 def render_dashboard_page(
     jsa_records: list[dict[str, object]],
     hazard_records: list[dict[str, object]],
+    job_records: list[dict[str, object]] | None = None,
 ) -> None:
-    """Render a lightweight dashboard backed directly by session-state lists."""
-    metrics = calculate_dashboard_metrics(jsa_records, hazard_records)
+    """Render the business-first EHS dashboard backed by session-state lists."""
+    job_rows = list(job_records or [])
+    metrics = calculate_dashboard_metrics(
+        jsa_records, hazard_records, job_rows
+    )
     jsa_distribution = get_jsa_risk_distribution(jsa_records)
     hazard_distributions = get_hazard_distributions(hazard_records)
     priority = get_priority_items(jsa_records, hazard_records)
 
-    st.title("EHS仪表盘")
-    st.caption("汇总JSA风险评估与隐患整改数据，用于演示EHS风险识别和整改闭环管理。")
+    st.title("EHS驾驶舱")
+    st.caption("作业闭环、隐患整改与风险状态的业务总览。")
     st.info(
-        "本页面数据来自JSA及隐患整改模块的模拟/演示记录，"
+        "本页面数据来自作业闭环、JSA及隐患整改模块的会话记录，"
         "仅用于EHS数字化原型展示，不代表真实企业数据。"
     )
     st.warning("本工具不替代企业制度、现场风险评估及专业人员判断。")
 
+    st.subheader("作业闭环")
+    job_columns = st.columns(6)
+    job_columns[0].metric("在办作业", metrics["job_active"])
+    job_columns[1].metric("待审批", metrics["job_awaiting_approval"])
+    job_columns[2].metric("执行中", metrics["job_executing"])
+    job_columns[3].metric("待复查", metrics["job_awaiting_review"])
+    job_columns[4].metric("高风险作业", metrics["job_high_risk"])
+    job_columns[5].metric("作业闭环率", f"{metrics['job_completion_rate']:.1f}%")
+
+    st.subheader("隐患整改")
     metric_columns = st.columns(6)
-    metric_columns[0].metric("JSA高/重大风险", metrics["jsa_high_major"])
-    metric_columns[1].metric("待整改隐患", metrics["hazard_pending"])
+    metric_columns[0].metric("待整改隐患", metrics["hazard_pending"])
+    metric_columns[1].metric("逾期隐患", metrics["hazard_overdue"])
     metric_columns[2].metric("已关闭隐患", metrics["hazard_closed"])
     metric_columns[3].metric("整改完成率", f"{metrics['completion_rate']:.1f}%")
-    metric_columns[4].metric("JSA记录总数", metrics["jsa_total"])
+    metric_columns[4].metric("JSA高/重大风险", metrics["jsa_high_major"])
     metric_columns[5].metric("隐患总数", metrics["hazard_total"])
+    st.caption(
+        f"作业总数：{metrics['job_total']}（已关闭 {metrics['job_closed']}）｜"
+        f"JSA记录总数：{metrics['jsa_total']}"
+    )
 
     st.subheader("风险分布")
     risk_columns = st.columns(2)
