@@ -333,6 +333,21 @@ python evals/evaluate.py
 3. Main file path填写 `app.py`；
 4. 默认免费检索模式无需配置Secrets，重新部署即可。
 
+## V4 进行中：HF 酸洗案例的证据来源（P2）
+
+V4 正在构建「危化品非例行作业单」主线，HF 酸洗为验收案例。为避免用模型知识编写安全结论，案例的数据被严格拆分为两类，**任何页面与导出都不得混排**：
+
+| 数据类别 | 内容 | 来源 | 标注 |
+| --- | --- | --- | --- |
+| 真实公开来源安全证据 | 危险性、暴露限值、PPE、急救、泄漏、消防等**逐字引用片段**，附来源链接、机构、章节定位与抓取日期 | NIOSH / OSHA 等美国政府公开资料 | 「公开来源证据（非 SDS）」 |
+| 模拟业务数据 | 作业名称、区域、人员、责任人、日期、隐患编号、整改证据占位 | 本项目虚构 | 「模拟数据 / Demo」 |
+
+- 证据包：`data/demo_evidence/hf_evidence_pack.json`（字段与来源清单见 `data/demo_evidence/README.md`）；
+- SDS 来源登记：`data/demo_sds/hf_sds_source_registry.json`，当前状态 `pending_real_source`；
+- 当前**不包含**任何可随仓库分发的完整 HF SDS PDF：厂商 SDS 受版权约束，政府公开资料并非 SDS；
+- 在真实 SDS 登记前，HF 案例只提供公开来源证据，**不生成 SDS 结论，也不生成 JSA 草稿**；
+- 手动补充合法 SDS 的两种兼容路径（应用内上传 / 登记为案例资产）见 `data/demo_evidence/README.md`。
+
 ## 项目限制
 
 ### 定位限制

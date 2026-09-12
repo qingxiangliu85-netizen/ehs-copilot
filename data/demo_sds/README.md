@@ -13,3 +13,13 @@
 - 许可证和来源已经核验的公共领域材料。
 
 请勿提交供应商版权状态不明确的 SDS，也不要提交包含实验室人员、企业内部信息、个人隐私或受限资料的文件。本目录下其他 PDF 均由 `.gitignore` 默认排除，只有上述自行生成的 Demo PDF 允许提交。
+
+## HF 案例来源状态（V4 P2）
+
+`hf_sds_source_registry.json` 登记 HF 酸洗 Demo 案例的 SDS 来源状态与候选公开资料。当前状态为 `pending_real_source`：
+
+- 尚未引入可合法再分发、且可核验的 HF SDS；
+- 在来源补齐前，`demo_cases.py` 不生成任何 HF 危险性、PPE、急救、泄漏或消防结论；
+- NIOSH / OSHA / NOAA 等政府公开资料仅可作交叉核对参考，不能替代 SDS，详见登记表；
+- 已建立的公开来源证据包见 `data/demo_evidence/`（逐字引用 + 来源链接，标注为「非 SDS」）；
+- 补齐来源后，需同步更新 `registered_demo_sds`、`.gitignore` 白名单与对应测试。

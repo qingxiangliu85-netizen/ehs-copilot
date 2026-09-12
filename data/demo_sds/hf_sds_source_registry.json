@@ -1,0 +1,116 @@
+{
+  "schema": "ehs-copilot/hf-sds-source-registry@1",
+  "case_id": "hf-pickling-demo",
+  "status": "pending_real_source",
+  "updated_on": "2026-09-12",
+  "rule": "只有在来源是可核验的 SDS、且具备合法再分发依据（本项目自行生成模拟数据 / 权利人书面许可 / 已核验的公共领域）时，才允许将 status 置为 ready 并在 registered_demo_sds 中登记文件。禁止依据模型知识或非 SDS 摘要自行编写危险性、PPE、急救、泄漏、消防等安全结论。",
+  "fill_steps": [
+    "1. 选定来源并记录来源类型、发布方、URL 与访问日期；确认其再分发许可。",
+    "2. 将 SDS 原文（不改写安全条款）保存为 data/demo_sds/ 下的 PDF，并在 registered_demo_sds 登记文件名。",
+    "3. 在 legal_confirmation 写明许可依据；在 .gitignore 中为该文件增加白名单。",
+    "4. 将 status 置为 ready，并在 tests/test_demo_cases.py 中更新对应断言。",
+    "5. 只有完成以上步骤后，后续阶段才允许从该 SDS 提取证据并生成 JSA 草稿。"
+  ],
+  "required_sections": [
+    { "number": 1, "title": "标识" },
+    { "number": 2, "title": "危险性概述" },
+    { "number": 3, "title": "成分/组成信息" },
+    { "number": 4, "title": "急救措施" },
+    { "number": 5, "title": "消防措施" },
+    { "number": 6, "title": "泄漏应急处理" },
+    { "number": 7, "title": "操作处置与储存" },
+    { "number": 8, "title": "接触控制/个体防护" },
+    { "number": 14, "title": "运输信息" }
+  ],
+  "candidate_sources": [
+    {
+      "id": "niosh-npg-hf",
+      "publisher": "NIOSH（美国 CDC）",
+      "title": "NIOSH Pocket Guide to Chemical Hazards — Hydrogen fluoride",
+      "url": "https://www.cdc.gov/niosh/npg/npgd0334.html",
+      "document_type": "pocket_guide",
+      "legal_basis": "美国联邦政府机构发布，公共领域候选（再分发前仍需最终核验）",
+      "covers": ["暴露限值", "个人防护与卫生", "呼吸器建议"],
+      "verified_on": "2026-09-12",
+      "usable_as_demo_sds": false,
+      "reason": "口袋指南，不是 SDS；可作为交叉核对参考，不能替代 SDS 原文。"
+    },
+    {
+      "id": "niosh-ershdb-hf",
+      "publisher": "NIOSH（美国 CDC）",
+      "title": "Emergency Response Safety and Health Database — Hydrogen Fluoride/Hydrofluoric Acid: Systemic Agent",
+      "url": "https://www.cdc.gov/niosh/ershdb/emergencyresponsecard_29750030.html",
+      "document_type": "emergency_response_card",
+      "legal_basis": "美国联邦政府机构发布，公共领域候选（再分发前仍需最终核验）",
+      "covers": ["应急响应", "去污", "急救", "UN 编号"],
+      "verified_on": "2026-09-12",
+      "usable_as_demo_sds": false,
+      "reason": "应急响应卡，不是 SDS；可用于应急流程交叉核对。"
+    },
+    {
+      "id": "osha-chemical-data-hf",
+      "publisher": "OSHA（美国劳工部）",
+      "title": "OSHA Chemical Data — Hydrogen Fluoride",
+      "url": "https://www.osha.gov/chemicaldata/622",
+      "document_type": "regulatory_database",
+      "legal_basis": "美国联邦政府机构发布，公共领域候选（再分发前仍需最终核验）",
+      "covers": ["PEL", "IDLH", "理化数据"],
+      "verified_on": "2026-09-12",
+      "usable_as_demo_sds": false,
+      "reason": "监管数据页，不是 SDS；可用于暴露限值交叉核对。"
+    },
+    {
+      "id": "noaa-cameo-hf",
+      "publisher": "NOAA",
+      "title": "CAMEO Chemicals — Hydrogen Fluoride (HFX)",
+      "url": "https://cameochemicals.noaa.gov/chris/HFX.pdf",
+      "document_type": "emergency_response_data",
+      "legal_basis": "美国联邦政府机构发布，公共领域候选（再分发前仍需最终核验）",
+      "covers": ["健康危害", "PPE", "急救", "泄漏处置"],
+      "verified_on": "2026-09-12",
+      "usable_as_demo_sds": false,
+      "reason": "应急响应数据表，不是 SDS；可用于应急处置交叉核对。"
+    },
+    {
+      "id": "cdc-niosh-criteria-hf-1976",
+      "publisher": "NIOSH（美国 CDC）",
+      "title": "Criteria for a Recommended Standard — Occupational Exposure to Hydrogen Fluoride (1976)",
+      "url": "https://stacks.cdc.gov/view/cdc/19358/cdc_19358_DS1.pdf",
+      "document_type": "criteria_document",
+      "legal_basis": "美国联邦政府机构发布，公共领域候选（再分发前仍需最终核验）",
+      "covers": ["职业暴露标准依据", "附录含历史 MSDS 表格"],
+      "verified_on": "2026-09-12",
+      "usable_as_demo_sds": false,
+      "reason": "历史标准论证文档（1976），其附录 MSDS 已非现行 SDS 格式；仅供来源核验参考。"
+    }
+  ],
+  "rejected_sources": [
+    {
+      "id": "vendor-airgas-001077",
+      "publisher": "Airgas",
+      "title": "Safety Data Sheet — Hydrogen Fluoride (SDS #001077)",
+      "url": "https://www.airgas.com/msds/001077.pdf",
+      "document_type": "sds",
+      "rejected_reason": "厂商 SDS 原文受版权约束，且未取得书面再分发许可；项目政策（data/demo_sds/README.md）禁止提交版权状态不明的 SDS。"
+    },
+    {
+      "id": "vendor-honeywell-ahf",
+      "publisher": "Honeywell",
+      "title": "Safety Data Sheet — Anhydrous Hydrogen Fluoride",
+      "url": "https://prod-edam.honeywell.com/content/dam/honeywell-edam/pmt/oneam/en-us/hydrofluoric-acid/pmt-am-ahf-sds.pdf",
+      "document_type": "sds",
+      "rejected_reason": "同上：厂商 SDS 受版权约束且未获书面再分发许可；仅可由人工在仓库外交叉核对，不进入仓库。"
+    }
+  ],
+  "verification": {
+    "checked_on": "2026-09-12",
+    "method": "公开网络检索（V4 P2 数据尽调）",
+    "conclusion": "未发现可直接再分发的公共领域 HF SDS 原文：厂商 SDS 受版权约束，政府公开资料（NIOSH/OSHA/NOAA）可交叉核对但并非 SDS。因此 Demo 案例保持 pending_real_source，不生成任何 HF 安全结论。"
+  },
+  "registered_demo_sds": {
+    "file_name": "",
+    "source_id": "",
+    "added_on": "",
+    "legal_confirmation": ""
+  }
+}
