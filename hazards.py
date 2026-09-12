@@ -37,6 +37,18 @@ HAZARD_FIELDS = (
     "状态",
 )
 
+# V4 optional fields: job linkage, rectification evidence and review/closure.
+# They are additive only; records without them stay valid.
+HAZARD_OPTIONAL_FIELDS = (
+    "related_job_id",
+    "rectification_evidence",
+    "reviewer",
+    "review_date",
+    "review_note",
+    "closed_by",
+    "closed_at",
+)
+
 
 def _normalise_date(value: object, field_name: str) -> str:
     if isinstance(value, datetime):
@@ -48,6 +60,45 @@ def _normalise_date(value: object, field_name: str) -> str:
         return date.fromisoformat(text).isoformat()
     except ValueError as exc:
         raise ValueError(f"{field_name}必须为有效日期。") from exc
+
+
+def _normalise_optional_fields(
+    *,
+    related_job_id: object = "",
+    rectification_evidence: Iterable[Mapping[str, object]] | None = None,
+    reviewer: object = "",
+    review_date: object = "",
+    review_note: object = "",
+    closed_by: object = "",
+    closed_at: object = "",
+) -> dict[str, object]:
+    """Return only the optional V4 fields that carry a value."""
+    fields: dict[str, object] = {}
+    if str(related_job_id or "").strip():
+        fields["related_job_id"] = str(related_job_id).strip()
+
+    evidence = list(rectification_evidence or ())
+    if evidence:
+        rows: list[dict[str, object]] = []
+        for index, item in enumerate(evidence, start=1):
+            if not isinstance(item, Mapping):
+                raise ValueError(
+                    f"rectification_evidence 第 {index} 项必须是一个对象。"
+                )
+            rows.append(dict(item))
+        fields["rectification_evidence"] = rows
+
+    if str(reviewer or "").strip():
+        fields["reviewer"] = str(reviewer).strip()
+    if review_date not in ("", None):
+        fields["review_date"] = _normalise_date(review_date, "review_date")
+    if str(review_note or "").strip():
+        fields["review_note"] = str(review_note).strip()
+    if str(closed_by or "").strip():
+        fields["closed_by"] = str(closed_by).strip()
+    if closed_at not in ("", None):
+        fields["closed_at"] = _normalise_date(closed_at, "closed_at")
+    return fields
 
 
 def validate_hazard_record(
@@ -98,8 +149,20 @@ def create_hazard_record(
     status: str,
     data_label: str = USER_DATA_LABEL,
     existing_ids: Iterable[str] = (),
+    related_job_id: str = "",
+    rectification_evidence: Iterable[Mapping[str, object]] | None = None,
+    reviewer: str = "",
+    review_date: object = "",
+    review_note: str = "",
+    closed_by: str = "",
+    closed_at: object = "",
 ) -> dict[str, object]:
-    """Create and validate a dashboard-ready hazard record."""
+    """Create and validate a dashboard-ready hazard record.
+
+    The ``related_job_id`` / evidence / review / closure parameters are the
+    optional V4 fields; when left empty the record is identical to the V3
+    shape.
+    """
     record: dict[str, object] = {
         "隐患编号": str(hazard_id).strip(),
         "隐患描述": str(description).strip(),
@@ -112,6 +175,17 @@ def create_hazard_record(
         "状态": status,
         "数据性质": str(data_label).strip() or USER_DATA_LABEL,
     }
+    record.update(
+        _normalise_optional_fields(
+            related_job_id=related_job_id,
+            rectification_evidence=rectification_evidence,
+            reviewer=reviewer,
+            review_date=review_date,
+            review_note=review_note,
+            closed_by=closed_by,
+            closed_at=closed_at,
+        )
+    )
     errors = validate_hazard_record(record, existing_ids=existing_ids)
     if errors:
         raise ValueError("；".join(errors))
@@ -138,6 +212,11 @@ def update_hazard_record(
         candidate["发现日期"] = _normalise_date(candidate["发现日期"], "发现日期")
     if "整改期限" in candidate:
         candidate["整改期限"] = _normalise_date(candidate["整改期限"], "整改期限")
+    for optional_date_field in ("review_date", "closed_at"):
+        if candidate.get(optional_date_field) not in (None, ""):
+            candidate[optional_date_field] = _normalise_date(
+                candidate[optional_date_field], optional_date_field
+            )
 
     errors = validate_hazard_record(
         candidate,
@@ -216,6 +295,9 @@ def hazards_to_csv(records: Iterable[Mapping[str, object]]) -> bytes:
     fieldnames = list(HAZARD_FIELDS)
     if any("数据性质" in row for row in rows):
         fieldnames.append("数据性质")
+    for optional_field in HAZARD_OPTIONAL_FIELDS:
+        if any(optional_field in row for row in rows):
+            fieldnames.append(optional_field)
     buffer = StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
