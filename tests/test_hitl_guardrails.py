@@ -664,7 +664,7 @@ class WorkflowPageApprovalTests(unittest.TestCase):
         app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=600).run()
         self.assertEqual(len(app.exception), 0)
 
-        app.radio[0].set_value("AI工作流助手").run(timeout=600)
+        app.radio[0].set_value("AI工作流控制台").run(timeout=600)
         self.assertEqual(len(app.exception), 0)
 
         before = len(app.session_state["hazard_records"])

@@ -91,6 +91,21 @@ _NEXT_ACTIONS: dict[str, str] = {
     JOB_STATUS_REJECTED: "已驳回（流程终止）",
 }
 
+# Column geometry and captions of the home-page job list.  The header row and
+# the data rows must share one definition, otherwise the columns drift apart.
+_JOB_LIST_WIDTHS: tuple[float, ...] = (1.1, 2.0, 1.3, 1.0, 1.0, 1.0, 1.2, 1.5, 0.8)
+_JOB_LIST_HEADERS: tuple[str, ...] = (
+    "作业编号",
+    "作业名称",
+    "化学品",
+    "风险",
+    "状态",
+    "责任人",
+    "更新时间",
+    "下一步",
+    "操作",
+)
+
 
 # --------------------------------------------------------------------------- #
 # Shared helpers
@@ -158,6 +173,14 @@ def job_close_blockers(
     if open_ids:
         return ["存在未关闭的关联隐患：" + "、".join(open_ids)]
     return []
+
+
+def _iso_date(value: object, fallback: date | None = None) -> date:
+    """Parse a stored ISO date without letting a bad value break the page."""
+    try:
+        return date.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback or date.today()
 
 
 @contextmanager
@@ -294,6 +317,49 @@ def _hazard_rows(
     return rows
 
 
+def _linked_hazards(
+    job: Mapping[str, object],
+    hazard_records: MutableSequence[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Return the existing linked-hazard records of one job."""
+    rows: list[dict[str, object]] = []
+    for hazard_id in job.get("linked_hazard_ids") or ():
+        hazard = find_hazard(hazard_records, str(hazard_id))
+        if hazard is not None:
+            rows.append(hazard)
+    return rows
+
+
+def _all_hazards_closed(hazards: list[dict[str, object]]) -> bool:
+    return bool(hazards) and all(
+        str(item.get("状态", "")) == "已关闭" for item in hazards
+    )
+
+
+def _all_hazards_evidenced(hazards: list[dict[str, object]]) -> bool:
+    return bool(hazards) and all(
+        str(item.get("状态", "")) == "已关闭"
+        or bool(list(item.get("rectification_evidence") or ()))
+        for item in hazards
+    )
+
+
+def _all_hazards_reviewed(hazards: list[dict[str, object]]) -> bool:
+    return bool(hazards) and all(
+        str(item.get("状态", "")) == "已关闭"
+        or (
+            str(item.get("reviewer", "")).strip()
+            and str(item.get("review_note", "")).strip()
+        )
+        for item in hazards
+    )
+
+
+def evidence_track_status(job: Mapping[str, object]) -> tuple[bool, bool]:
+    """Return ``(public_ready, sds_ready)`` for the two evidence tracks."""
+    return bool(job.get("public_evidence")), bool(job.get("sds_evidence"))
+
+
 # --------------------------------------------------------------------------- #
 # Workbench (home)
 # --------------------------------------------------------------------------- #
@@ -360,11 +426,27 @@ def render_workbench_page(
     count_column.caption(f"共 {len(rows)} 条作业")
 
     if not rows:
-        st.info("暂无作业。点击「一键载入HF酸洗模拟案例」体验完整闭环，或新建一条作业。")
+        if not job_records:
+            st.info(
+                "暂无作业。点击「一键载入HF酸洗模拟案例」体验完整闭环，或新建一条作业。"
+            )
+        else:
+            st.info(
+                f"「{status_filter}」筛选下没有作业（当前共 {len(job_records)} 条）。"
+                "请调整状态筛选或新建作业。"
+            )
         return
 
+    _render_job_list_header()
     for job in rows:
         _render_job_row(job)
+
+
+def _render_job_list_header() -> None:
+    """Render the column captions of the job list so rows stay readable."""
+    columns = st.columns(_JOB_LIST_WIDTHS)
+    for column, header in zip(columns, _JOB_LIST_HEADERS):
+        column.markdown(f"**{header}**")
 
 
 def _render_job_row(job: Mapping[str, object]) -> None:
@@ -374,7 +456,7 @@ def _render_job_row(job: Mapping[str, object]) -> None:
         if str(item.get("name", "")).strip()
     ) or "—"
     with st.container(border=True):
-        columns = st.columns((1.1, 2.0, 1.3, 1.0, 1.0, 1.0, 1.2, 1.5, 0.8))
+        columns = st.columns(_JOB_LIST_WIDTHS)
         columns[0].markdown(f"**{job.get('job_id', '')}**")
         columns[1].markdown(str(job.get("job_name", "")))
         columns[2].caption(chemicals)
@@ -554,14 +636,20 @@ def _render_stage_basics(job: Mapping[str, object]) -> None:
 def _render_stage_evidence(job: Mapping[str, object], vector_store: Any) -> None:
     from job_review import attach_sds_evidence
 
-    has_public = bool(job.get("public_evidence"))
-    has_sds = bool(job.get("sds_evidence"))
+    has_public, has_sds = evidence_track_status(job)
     state = _stage_state(
         job,
         done=has_public or has_sds,
-        active=str(job.get("status", "")) == JOB_STATUS_DRAFT,
+        active=str(job.get("status", "")) == JOB_STATUS_DRAFT
+        and not (has_public or has_sds),
     )
     with _stage(2, "安全证据", state):
+        st.caption(
+            "证据轨道状态：公开安全证据 "
+            + ("✅ 已挂接" if has_public else "⚠️ 缺失")
+            + " ｜ SDS 证据 "
+            + ("✅ 已挂接" if has_sds else "⚠️ 缺失（不得称其为 SDS 结论）")
+        )
         st.markdown("##### 【公开安全证据】非 SDS")
         st.caption(
             "来自 NIOSH / OSHA 等公开资料的逐字引用，仅用于演示与人工交叉核对，不替代 SDS。"
@@ -992,7 +1080,9 @@ def _render_stage_hazards(
         JOB_STATUS_EXECUTING,
         JOB_STATUS_AWAITING_REVIEW,
     }
-    state = _stage_state(job, done=False, active=workable)
+    linked = _linked_hazards(job, hazard_records)
+    resolved = _all_hazards_closed(linked)
+    state = _stage_state(job, done=resolved, active=workable and not resolved)
     with _stage(7, "关联隐患", state):
         rows = _hazard_rows(job, hazard_records)
         if rows:
@@ -1005,7 +1095,18 @@ def _render_stage_hazards(
             return
 
         st.markdown("**从 JSA 危害生成隐患 / 人工新增**")
-        drafts = draft_hazards_from_jsa(job)
+        # A draft that was already written to the ledger must not be offered
+        # again, otherwise the same JSA hazard can be created twice.
+        known_descriptions = {
+            str(item.get("隐患描述", "")).strip() for item in linked
+        }
+        drafts = [
+            item
+            for item in draft_hazards_from_jsa(job)
+            if str(item.get("description", "")).strip() not in known_descriptions
+        ]
+        if not drafts:
+            st.caption("JSA 危害候选已全部转为关联隐患，可继续手动新增。")
         options = ["手动新增（不引用JSA草稿）"] + [
             f"{index}. {str(item.get('description', ''))[:50]}"
             for index, item in enumerate(drafts, start=1)
@@ -1080,14 +1181,15 @@ def _render_stage_rectification(
         JOB_STATUS_EXECUTING,
         JOB_STATUS_AWAITING_REVIEW,
     }
-    with _stage(8, "整改证据", _stage_state(job, done=False, active=workable)):
+    linked = _linked_hazards(job, hazard_records)
+    evidenced = _all_hazards_evidenced(linked)
+    with _stage(
+        8,
+        "整改证据",
+        _stage_state(job, done=evidenced, active=workable and not evidenced),
+    ):
         open_hazards = [
-            hazard
-            for hazard in (
-                find_hazard(hazard_records, str(hid))
-                for hid in job.get("linked_hazard_ids") or ()
-            )
-            if hazard is not None and str(hazard.get("状态", "")) != "已关闭"
+            hazard for hazard in linked if str(hazard.get("状态", "")) != "已关闭"
         ]
         if not open_hazards:
             st.caption("当前没有待整改的关联隐患。")
@@ -1095,6 +1197,18 @@ def _render_stage_rectification(
         if not workable:
             st.caption("执行开始后，可在此指派责任人与上传整改证据。")
             return
+
+        demo_placeholder = st.checkbox(
+            "Demo：无真实文件时使用模拟证据占位文件名",
+            key=f"evidence_placeholder_{job.get('job_id', '')}",
+            help=(
+                "本原型不上传文件内容，只记录文件名、类型、上传人等元数据。"
+                "取消勾选时必须选择真实文件，否则不能创建整改证据。"
+            ),
+        )
+        st.caption(
+            "整改证据是关闭隐患的必要条件：缺少证据的隐患不能复查通过，也不能关闭。"
+        )
 
         for hazard in open_hazards:
             identifier = str(hazard.get("隐患编号", ""))
@@ -1116,7 +1230,7 @@ def _render_stage_rectification(
                     )
                     due_on = first[1].date_input(
                         "整改期限",
-                        value=date.fromisoformat(str(hazard.get("整改期限"))),
+                        value=_iso_date(hazard.get("整改期限")),
                         key=f"assign_due_{identifier}",
                     )
                     corrective_action = st.text_area(
@@ -1145,7 +1259,7 @@ def _render_stage_rectification(
 
                 st.markdown("**上传整改证据**")
                 uploaded = st.file_uploader(
-                    "选择整改证据文件（Demo 仅记录文件信息）",
+                    "选择整改证据文件（Demo 仅记录文件信息，不上传文件内容）",
                     key=f"evidence_file_{identifier}",
                 )
                 with st.form(f"evidence_form_{identifier}"):
@@ -1153,16 +1267,34 @@ def _render_stage_rectification(
                     evidence_type = first[0].selectbox(
                         "证据类型", RECTIFICATION_EVIDENCE_TYPES
                     )
-                    uploader = first[1].text_input("上传人", value="")
+                    uploader = first[1].text_input(
+                        "上传人",
+                        value=str(hazard.get("责任人", "")).strip()
+                        or "整改责任人（模拟）",
+                    )
+                    placeholder_name = st.text_input(
+                        "证据文件名",
+                        value=f"（占位）{identifier} 整改证据（模拟）.pdf",
+                        help=(
+                            "已选择上传文件时以所选文件为准；"
+                            "否则仅在勾选「使用模拟证据占位」时使用此文件名。"
+                        ),
+                    )
                     note = st.text_input("说明", value="")
                     if st.form_submit_button("上传整改证据", use_container_width=True):
+                        if uploaded is not None:
+                            file_name = uploaded.name
+                        elif demo_placeholder:
+                            file_name = str(placeholder_name).strip()
+                        else:
+                            file_name = ""
                         try:
                             submit_rectification_evidence(
                                 job_records,
                                 hazard_records,
                                 str(job.get("job_id", "")),
                                 identifier,
-                                file_name=uploaded.name if uploaded else "",
+                                file_name=file_name,
                                 uploaded_by=uploader,
                                 evidence_type=evidence_type,
                                 note=note,
@@ -1181,14 +1313,15 @@ def _render_stage_review(
         JOB_STATUS_EXECUTING,
         JOB_STATUS_AWAITING_REVIEW,
     }
-    with _stage(9, "EHS复查", _stage_state(job, done=False, active=workable)):
+    linked = _linked_hazards(job, hazard_records)
+    reviewed = _all_hazards_reviewed(linked)
+    with _stage(
+        9,
+        "EHS复查",
+        _stage_state(job, done=reviewed, active=workable and not reviewed),
+    ):
         open_hazards = [
-            hazard
-            for hazard in (
-                find_hazard(hazard_records, str(hid))
-                for hid in job.get("linked_hazard_ids") or ()
-            )
-            if hazard is not None and str(hazard.get("状态", "")) != "已关闭"
+            hazard for hazard in linked if str(hazard.get("状态", "")) != "已关闭"
         ]
         if not open_hazards:
             st.caption("当前没有待复查的关联隐患。")
@@ -1358,6 +1491,7 @@ __all__ = [
     "JOB_FLOW",
     "NEW_JOB_KEY",
     "close_blockers",
+    "evidence_track_status",
     "find_hazard",
     "job_close_blockers",
     "job_owner_label",

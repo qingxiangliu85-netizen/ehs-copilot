@@ -390,7 +390,7 @@ class WorkflowPageTests(unittest.TestCase):
         app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
         self.assertEqual(len(app.exception), 0)
 
-        app.radio[0].set_value("AI工作流助手").run(timeout=300)
+        app.radio[0].set_value("AI工作流控制台").run(timeout=300)
         self.assertEqual(len(app.exception), 0)
         labels = [item.label for item in app.button]
         self.assertIn("运行工作流", labels)
@@ -419,19 +419,39 @@ class WorkflowPageTests(unittest.TestCase):
         ):
             self.assertIn(section, markdown)
 
-    def test_existing_four_pages_are_still_available(self) -> None:
+    def test_existing_pages_are_still_available_under_v4_navigation(self) -> None:
+        """P4B: 旧的 SDS / JSA / 隐患 / 工作流能力必须保留在新的七项一级导航下。"""
         app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        self.assertEqual(len(app.exception), 0)
         options = list(app.radio[0].options)
         self.assertEqual(
             options,
             [
-                "EHS仪表盘",
-                "SDS智能检索",
-                "JSA风险评估",
-                "隐患整改管理",
-                "AI工作流助手",
+                "作业闭环",
+                "隐患整改",
+                "EHS驾驶舱",
+                "工具箱",
+                "SDS资料库",
+                "JSA工具",
+                "AI工作流控制台",
             ],
         )
+        # 每一项都必须能真实渲染且不抛异常；旧能力没有被删除。
+        expected_titles = {
+            "作业闭环": "作业闭环",
+            "隐患整改": "隐患整改管理",
+            "EHS驾驶舱": "EHS驾驶舱",
+            "工具箱": "工具箱",
+            "SDS资料库": "SDS资料库",
+            "JSA工具": "JSA风险评估",
+            "AI工作流控制台": None,
+        }
+        for page, title in expected_titles.items():
+            with self.subTest(page=page):
+                app.radio[0].set_value(page).run(timeout=300)
+                self.assertEqual(len(app.exception), 0, page)
+                if title is not None:
+                    self.assertIn(title, [item.value for item in app.title])
 
 
 if __name__ == "__main__":

@@ -35,6 +35,96 @@ from workbench import render_job_detail_page, render_workbench_page
 from workflow.ui import render_workflow_page
 
 
+NAV_PAGE_KEY = "nav_page"
+NAV_PAGES: tuple[str, ...] = (
+    "作业闭环",
+    "隐患整改",
+    "EHS驾驶舱",
+    "工具箱",
+    "SDS资料库",
+    "JSA工具",
+    "AI工作流控制台",
+)
+TOOLBOX_PAGES: tuple[str, ...] = ("SDS资料库", "JSA工具", "AI工作流控制台")
+DEFAULT_NAV_PAGE = "作业闭环"
+
+TOOLBOX_ENTRIES: tuple[tuple[str, str, str], ...] = (
+    (
+        "SDS资料库",
+        "SDS Knowledge Base",
+        "上传合法 SDS 并基于语义检索定位危险性、PPE、储存、急救、泄漏与消防信息，"
+        "每条结论都带来源文件与页码。",
+    ),
+    (
+        "JSA工具",
+        "Job Safety Analysis",
+        "手工录入作业步骤、危害与控制措施，按 R=L×S 自动计算初始风险与残余风险。",
+    ),
+    (
+        "AI工作流控制台",
+        "AI Workflow Console",
+        "在人工审批与 Guardrail 约束下运行 AI 工作流，自动生成的 JSA 与隐患均为草稿。",
+    ),
+)
+
+def goto_page(page: str) -> None:
+    """Switch the top-level navigation page from a widget callback.
+
+    This must only ever run inside an ``on_click`` / ``on_change`` callback:
+    Streamlit forbids writing to a widget-keyed ``session_state`` entry after
+    that widget has been instantiated, and callbacks run *before* the script
+    reruns, so the write happens while ``nav_page`` has no live widget yet.
+    """
+    if page not in NAV_PAGES:
+        return
+    st.session_state[NAV_PAGE_KEY] = page
+
+
+def safe_index(options: tuple[str, ...], value: object, default: int = 0) -> int:
+    """Return ``value``'s position in ``options`` without raising."""
+    text = str(value).strip()
+    try:
+        return options.index(text)  # type: ignore[arg-type]
+    except ValueError:
+        return default
+
+
+def safe_iso_date(value: object, fallback: date | None = None) -> date:
+    """Parse an ISO date string, falling back instead of raising."""
+    try:
+        return date.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback or date.today()
+
+
+def legacy_close_guard(record: dict[str, object], new_status: object) -> str:
+    """Block closing a *job-linked* hazard from the standalone hazard module.
+
+    Stand-alone (V2) hazards keep their original behaviour.  Hazards that were
+    created inside a V4 job must be closed through the job flow, which enforces
+    rectification evidence, a reviewer and a review note — otherwise the job
+    could be closed with no real rectification at all.
+    """
+    if str(new_status).strip() != "已关闭":
+        return ""
+    job_id = str(record.get("related_job_id", "")).strip()
+    if not job_id:
+        return ""
+    blockers: list[str] = []
+    if not list(record.get("rectification_evidence") or ()):
+        blockers.append("缺少整改证据")
+    if not str(record.get("reviewer", "")).strip():
+        blockers.append("缺少复查人")
+    if not str(record.get("review_note", "")).strip():
+        blockers.append("缺少复查意见")
+    if not blockers:
+        return ""
+    return (
+        f"隐患属于作业 {job_id}，不能在隐患模块直接关闭（{'；'.join(blockers)}）。"
+        "请回到「作业闭环 → 整改证据 / EHS复查」完成闭环。"
+    )
+
+
 EXAMPLE_QUESTIONS = (
     "主要危险性是什么？",
     "操作需要哪些 PPE？",
@@ -83,6 +173,7 @@ def initialize_state() -> None:
         "job_records": [],
         "active_job_id": None,
         "new_job_open": False,
+        NAV_PAGE_KEY: DEFAULT_NAV_PAGE,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -524,15 +615,19 @@ def render_hazard_page() -> None:
             quick_status = status_columns[0].selectbox(
                 "整改状态",
                 HAZARD_STATUSES,
-                index=HAZARD_STATUSES.index(str(selected_record["状态"])),
+                index=safe_index(HAZARD_STATUSES, selected_record.get("状态"), 0),
                 key=f"hazard_quick_status_{selected_id}",
             )
             if status_columns[1].button(
                 "更新状态", type="primary", use_container_width=True
             ):
-                update_hazard_record(records, selected_id, {"状态": quick_status})
-                st.session_state.hazard_notice = f"已更新 {selected_id} 的整改状态。"
-                st.rerun()
+                guard = legacy_close_guard(selected_record, quick_status)
+                if guard:
+                    st.error(guard)
+                else:
+                    update_hazard_record(records, selected_id, {"状态": quick_status})
+                    st.session_state.hazard_notice = f"已更新 {selected_id} 的整改状态。"
+                    st.rerun()
 
             st.markdown("#### 修改隐患记录")
             with st.form(f"hazard_edit_form_{selected_id}"):
@@ -540,49 +635,51 @@ def render_hazard_page() -> None:
                 edit_type = edit_row[0].selectbox(
                     "隐患类型",
                     HAZARD_TYPES,
-                    index=HAZARD_TYPES.index(str(selected_record["隐患类型"])),
+                    index=safe_index(
+                        HAZARD_TYPES, selected_record.get("隐患类型"), 0
+                    ),
                     key=f"hazard_edit_type_{selected_id}",
                 )
                 edit_risk = edit_row[1].selectbox(
                     "风险等级",
                     HAZARD_RISK_LEVELS,
-                    index=HAZARD_RISK_LEVELS.index(
-                        str(selected_record["风险等级"])
+                    index=safe_index(
+                        HAZARD_RISK_LEVELS, selected_record.get("风险等级"), 0
                     ),
                     key=f"hazard_edit_risk_{selected_id}",
                 )
                 edit_description = st.text_area(
                     "隐患描述",
-                    value=str(selected_record["隐患描述"]),
+                    value=str(selected_record.get("隐患描述", "")),
                     height=90,
                     key=f"hazard_edit_description_{selected_id}",
                 )
                 edit_dates = st.columns((1, 1, 1))
                 edit_owner = edit_dates[0].text_input(
                     "责任人",
-                    value=str(selected_record["责任人"]),
+                    value=str(selected_record.get("责任人", "")),
                     key=f"hazard_edit_owner_{selected_id}",
                 )
                 edit_found_on = edit_dates[1].date_input(
                     "发现日期",
-                    value=date.fromisoformat(str(selected_record["发现日期"])),
+                    value=safe_iso_date(selected_record.get("发现日期")),
                     key=f"hazard_edit_found_{selected_id}",
                 )
                 edit_due_on = edit_dates[2].date_input(
                     "整改期限",
-                    value=date.fromisoformat(str(selected_record["整改期限"])),
+                    value=safe_iso_date(selected_record.get("整改期限")),
                     key=f"hazard_edit_due_{selected_id}",
                 )
                 edit_action = st.text_area(
                     "整改措施",
-                    value=str(selected_record["整改措施"]),
+                    value=str(selected_record.get("整改措施", "")),
                     height=100,
                     key=f"hazard_edit_action_{selected_id}",
                 )
                 edit_status = st.selectbox(
                     "状态",
                     HAZARD_STATUSES,
-                    index=HAZARD_STATUSES.index(str(selected_record["状态"])),
+                    index=safe_index(HAZARD_STATUSES, selected_record.get("状态"), 0),
                     key=f"hazard_edit_status_{selected_id}",
                 )
                 edit_submitted = st.form_submit_button(
@@ -590,25 +687,29 @@ def render_hazard_page() -> None:
                 )
 
             if edit_submitted:
-                try:
-                    update_hazard_record(
-                        records,
-                        selected_id,
-                        {
-                            "隐患描述": edit_description,
-                            "隐患类型": edit_type,
-                            "风险等级": edit_risk,
-                            "责任人": edit_owner,
-                            "发现日期": edit_found_on,
-                            "整改期限": edit_due_on,
-                            "整改措施": edit_action,
-                            "状态": edit_status,
-                        },
-                    )
-                    st.session_state.hazard_notice = f"已保存隐患记录：{selected_id}"
-                    st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
+                guard = legacy_close_guard(selected_record, edit_status)
+                if guard:
+                    st.error(guard)
+                else:
+                    try:
+                        update_hazard_record(
+                            records,
+                            selected_id,
+                            {
+                                "隐患描述": edit_description,
+                                "隐患类型": edit_type,
+                                "风险等级": edit_risk,
+                                "责任人": edit_owner,
+                                "发现日期": edit_found_on,
+                                "整改期限": edit_due_on,
+                                "整改措施": edit_action,
+                                "状态": edit_status,
+                            },
+                        )
+                        st.session_state.hazard_notice = f"已保存隐患记录：{selected_id}"
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
 
             st.markdown("#### 删除与导出")
             delete_column, clear_column = st.columns(2)
@@ -647,21 +748,46 @@ def render_hazard_page() -> None:
     )
 
 
+def render_toolbox_page() -> None:
+    """Render the toolbox overview that links to the three utility tools."""
+    st.title("工具箱")
+    st.caption("工具箱 / 全部工具｜原 SDS、JSA 与 AI 工作流能力均保留")
+    st.markdown(
+        "以下三个工具是 EHS Copilot 原有的独立能力，"
+        "已作为一级导航项保留，也可以从这里进入。"
+    )
+    columns = st.columns(len(TOOLBOX_ENTRIES))
+    for column, (name, english, description) in zip(columns, TOOLBOX_ENTRIES):
+        with column:
+            with st.container(border=True):
+                st.markdown(f"**{name}**")
+                st.caption(english)
+                st.write(description)
+                st.button(
+                    f"进入{name}",
+                    key=f"toolbox_open_{name}",
+                    use_container_width=True,
+                    on_click=goto_page,
+                    args=(name,),
+                    help="跳转到该工具的一级导航页面。",
+                )
+    st.divider()
+    st.caption(
+        "以上工具与本页 Demo 数据均为原型演示内容，不替代企业制度、"
+        "现场风险评估及专业人员判断。"
+    )
+
+
 initialize_state()
 with st.sidebar:
     st.subheader("功能导航")
     selected_page = st.radio(
         "功能导航",
-        ("作业闭环", "隐患整改", "EHS驾驶舱", "工具箱"),
-        index=0,
+        NAV_PAGES,
+        index=NAV_PAGES.index(DEFAULT_NAV_PAGE),
         label_visibility="collapsed",
+        key=NAV_PAGE_KEY,
     )
-    toolbox_page = ""
-    if selected_page == "工具箱":
-        toolbox_page = st.selectbox(
-            "工具箱",
-            ("SDS资料库", "JSA工具", "AI工作流控制台"),
-        )
 
 if selected_page == "作业闭环":
     with st.sidebar:
@@ -700,7 +826,11 @@ if selected_page == "EHS驾驶舱":
     )
     st.stop()
 
-if toolbox_page == "AI工作流控制台":
+if selected_page == "工具箱":
+    render_toolbox_page()
+    st.stop()
+
+if selected_page == "AI工作流控制台":
     with st.sidebar:
         st.divider()
         st.warning(
@@ -727,7 +857,7 @@ if toolbox_page == "AI工作流控制台":
     )
     st.stop()
 
-if toolbox_page == "JSA工具":
+if selected_page == "JSA工具":
     with st.sidebar:
         st.divider()
         st.warning(
@@ -736,7 +866,7 @@ if toolbox_page == "JSA工具":
     render_jsa_page()
     st.stop()
 
-# 工具箱 → SDS资料库（以下为 SDS 检索页）
+# 以下为 SDS 检索页（一级导航：SDS资料库）
 
 llm_available = is_llm_configured()
 
@@ -802,7 +932,7 @@ with st.sidebar:
     st.warning(SAFETY_DISCLAIMER)
 
 st.title("SDS资料库")
-st.caption("工具箱 / SDS资料库｜上传并构建自己的 SDS 知识库")
+st.caption("SDS资料库｜上传并构建自己的 SDS 知识库")
 st.markdown("### SDS智能检索")
 st.markdown(
     "**基于语义检索快速定位危险性、PPE、储存、急救、泄漏及消防信息，"

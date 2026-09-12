@@ -75,6 +75,8 @@ class DemoExperienceTests(unittest.TestCase):
         ):
             app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=240).run()
 
+            # P4B: SDS 检索页现在是一级导航项「SDS资料库」。
+            app.radio[0].set_value("SDS资料库").run(timeout=240)
             self.assertEqual(len(app.exception), 0)
             self.assertEqual(app.session_state["knowledge_base_mode"], "demo")
             self.assertEqual(
@@ -149,6 +151,8 @@ class DemoExperienceTests(unittest.TestCase):
             patch("rag.generate_response", side_effect=grounded_demo_llm) as mocked_llm,
         ):
             app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=240).run()
+            # P4B: SDS 检索页现在是一级导航项「SDS资料库」。
+            app.radio[0].set_value("SDS资料库").run(timeout=240)
             next(
                 button
                 for button in app.button
