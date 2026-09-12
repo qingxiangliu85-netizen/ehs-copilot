@@ -690,14 +690,21 @@ def start_job_execution(
     )
     if not approved:
         raise ValueError("作业单尚未获得人工批准（或已被驳回），不能进入执行。")
-    return transition_job(
+    moment = now or datetime.now()
+    transition_job(
         records,
         job_id,
         JOB_STATUS_EXECUTING,
         actor=actor,
         note=str(note or "").strip() or "批准后开始执行",
-        now=now,
+        now=moment,
     )
+    info = job.setdefault("execution_info", {})
+    if not isinstance(info, dict):
+        raise ValueError("execution_info 必须是对象。")
+    info["executor"] = str(actor).strip()
+    info["started_at"] = _stamp(moment)
+    return job
 
 
 __all__ = [

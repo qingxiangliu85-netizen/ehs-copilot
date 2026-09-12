@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import date
 from typing import Iterable, Mapping
 
 import pandas as pd
 import streamlit as st
 
 from hazards import HAZARD_STATUSES, HAZARD_TYPES, RISK_LEVELS, calculate_hazard_summary
+from jobs import JOB_STATUS_EXECUTING, job_summary
 from jsa import calculate_jsa_record_risks
 
 
@@ -78,23 +80,74 @@ def get_hazard_distributions(
     }
 
 
+def count_overdue_hazards(
+    hazard_records: Iterable[Mapping[str, object]],
+    *,
+    today: date | None = None,
+) -> int:
+    """Return the number of open hazards whose rectification due date passed."""
+    base = today or date.today()
+    count = 0
+    for record in hazard_records:
+        if str(record.get("状态", "")) == "已关闭":
+            continue
+        raw = str(record.get("整改期限", "")).strip()
+        if not raw:
+            continue
+        try:
+            due = date.fromisoformat(raw)
+        except ValueError:
+            continue
+        if due < base:
+            count += 1
+    return count
+
+
+def get_job_metrics(
+    job_records: Iterable[Mapping[str, object]],
+) -> dict[str, int | float]:
+    """Return the job-lifecycle metrics required by the dashboard."""
+    summary = job_summary(job_records)
+    distribution = dict(summary["status_distribution"])
+    return {
+        "job_total": int(summary["total"]),
+        "job_active": int(summary["active"]),
+        "job_awaiting_approval": int(summary["awaiting_approval"]),
+        "job_executing": int(distribution.get(JOB_STATUS_EXECUTING, 0)),
+        "job_awaiting_review": int(summary["awaiting_review"]),
+        "job_closed": int(summary["closed"]),
+        "job_rejected": int(summary["rejected"]),
+        "job_completion_rate": float(summary["completion_rate"]),
+    }
+
+
 def calculate_dashboard_metrics(
     jsa_records: Iterable[Mapping[str, object]],
     hazard_records: Iterable[Mapping[str, object]],
+    job_records: Iterable[Mapping[str, object]] = (),
+    *,
+    today: date | None = None,
 ) -> dict[str, int | float]:
-    """Calculate headline metrics from the live JSA and hazard record lists."""
+    """Calculate headline metrics from the live JSA / hazard / job lists.
+
+    ``job_records`` is optional so existing callers keep working; when it is
+    omitted the job metrics are reported as zero.
+    """
     jsa_rows = list(jsa_records)
     hazard_rows = list(hazard_records)
     jsa_distribution = get_jsa_risk_distribution(jsa_rows)
     hazard_summary = calculate_hazard_summary(hazard_rows)
-    return {
+    metrics: dict[str, int | float] = {
         "jsa_high_major": jsa_distribution["高"] + jsa_distribution["重大"],
         "hazard_pending": int(hazard_summary["pending"]),
         "hazard_closed": int(hazard_summary["closed"]),
         "completion_rate": float(hazard_summary["completion_rate"]),
         "jsa_total": len(jsa_rows),
         "hazard_total": len(hazard_rows),
+        "hazard_overdue": count_overdue_hazards(hazard_rows, today=today),
     }
+    metrics.update(get_job_metrics(job_records))
+    return metrics
 
 
 def get_priority_items(
