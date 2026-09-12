@@ -44,6 +44,50 @@
 - 列出少量高/重大风险JSA及高/重大且未关闭隐患；
 - 直接读取JSA与隐患模块的当前会话数据，页面刷新后同步变化。
 
+### 5. AI工作流助手（V3）
+
+- 统一任务入口：用一句自然语言描述任务，无需先选功能页；
+- LangGraph 状态机编排：`route → plan → guard_plan → tools → screen_evidence → summarize`；
+- 规则路由识别 SDS 查询、JSA 风险评估、隐患管理、仪表盘汇总及它们的组合任务；
+- 将现有能力工具化为 `search_sds`、`calculate_risk`、`draft_jsa`、`create_hazard`、`update_hazard`、`get_dashboard_summary`；
+- 页面完整展示：识别出的任务类型、计划调用的工具、当前执行步骤、工具执行结果与最终回答；
+- 自动生成的 JSA 与隐患记录会写回当前会话，与对应页面实时一致（均标注为草稿，需人工确认）。
+
+#### 5.1 Human-in-the-loop（人工确认）
+
+使用 LangGraph 原生 `interrupt()` + Checkpointer：需要确认时图会**暂停并落检查点**，暂停点之前的节点不会重跑，因此写操作绝不可能执行两次。
+
+以下操作必须暂停等待人工确认：
+
+- 创建隐患、修改隐患、关闭隐患；
+- 涉及重大风险的写操作；
+- AI 建议降低风险等级；
+- SDS 证据不足或来源冲突时继续使用结论。
+
+操作员可以 **批准** / **修改参数后批准** / **拒绝**：
+
+- 批准 → 用原参数继续；
+- 修改 → 用修改后的参数继续（只能改参数，不能换工具；任何会把重大风险、降低风险等级、关闭隐患等**新审批项**引入的修改会被按拒绝处理，需重新发起任务）；
+- 拒绝 → 流程立即停止，不执行任何工具调用。
+
+> 说明：`run_workflow()` 的 `auto_approve` 默认为 `True`，用于保持第一阶段的程序化调用语义；**Streamlit 页面始终传 `auto_approve=False`**，即真实使用路径一定经过人工审批。
+
+#### 5.2 Guardrail（安全规则）
+
+| 规则 | 等级 | 说明 |
+| --- | --- | --- |
+| SDS 结论必须有文件名、页码与原文证据 | 需审批 | 缺任一项即暂停；无人确认时一律阻断 |
+| 风险分值必须由现有代码计算 | 阻断 | 计划不得携带预置分值，返回的分值会用 `jsa.calculate_risk` 复算（含残余风险），不一致即丢弃 |
+| 化学品与 SDS 不匹配 | 阻断 | 问题点名的化学品不在已加载 SDS 覆盖范围内时，停止该 SDS 结论 |
+| SDS 来源冲突 | 需审批 | 同一章节命中多个不同来源文件时必须人工确认以哪份为准 |
+| 写操作必须经过审批 | 需审批 | 见 5.1 |
+| 紧急事件必须遵循企业应急预案 | 提示 | 识别到进行中的泄漏/火灾/中毒等事件时，提示按应急预案与专业人员指挥处置并拨打 119/120 |
+
+#### 5.3 执行时间线（Workflow Timeline）
+
+页面以时间线呈现：已识别任务 → 已生成计划 → 等待审批 / 已批准 / 已拒绝 → 已调用工具 → 已获取证据 → 当前风险等级 → 已生成 JSA → 已执行写操作 → 已完成。暂停时「等待审批」始终是最后一个事件；被拒绝/被阻断时终点会标注为对应状态。
+
+
 ## 技术栈
 
 - Python
@@ -51,6 +95,7 @@
 - HuggingFace Embeddings / Sentence Transformers
 - FAISS
 - LangChain
+- LangGraph（V3 工作流编排）
 - pypdf
 - OpenAI-compatible Chat API（可选）
 
@@ -59,14 +104,35 @@
 ```mermaid
 flowchart TD
     APP[app.py / Streamlit导航与会话状态]
+    APP --> WF[workflow/ / 路由 状态 审批 规则 时间线 与LangGraph编排]
+    WF --> TOOLS[tools/ / 现有能力工具化]
     APP --> RAG[rag.py / PDF解析 Chunk Embedding FAISS检索]
     APP --> JSA[jsa.py / L×S风险计算与CSV]
     APP --> HAZ[hazards.py / 隐患记录 校验 统计与CSV]
     APP --> DASH[dashboard.py / 指标 分布与重点事项]
+    TOOLS --> RAG
+    TOOLS --> JSA
+    TOOLS --> HAZ
+    TOOLS --> DASH
     JSA --> DASH
     HAZ --> DASH
     RAG -. 可选增强 .-> LLM[llm.py / Grounded LLM回答]
 ```
+
+`workflow/` 内部结构：
+
+| 模块 | 职责 |
+| --- | --- |
+| `router.py` | 规则路由：任务识别、参数抽取、工具计划 |
+| `state.py` | 图状态与结果对象（含审批、规则命中、时间线） |
+| `hitl.py` | 审批请求/决策对象（批准 / 修改 / 拒绝） |
+| `guardrails.py` | 纯函数式安全规则（证据、分值、化学品、紧急事件） |
+| `timeline.py` | 由状态派生的执行时间线 |
+| `graph.py` | LangGraph 编排与 `interrupt()` 暂停/恢复 |
+| `summary.py` | 确定性回答合成 |
+| `ui.py` | 「AI 工作流助手」页面 |
+
+工具层只是薄包装：风险计算、记录校验、指标聚合等业务逻辑仍保留在 `jsa.py`、`hazards.py`、`dashboard.py`、`rag.py` 中，`workflow/` 与 `tools/` 不复制这些逻辑。安全规则也**不自己算分**——风险分值一律由 `jsa.calculate_risk` 产生，再用同一函数复算校验。
 
 核心业务数据仅保存在当前Streamlit会话中，不使用数据库。Dashboard直接读取 `jsa_records` 和 `hazard_records`，不维护独立副本。
 
@@ -99,7 +165,7 @@ OPENAI_MODEL=gpt-4o-mini
 
 ## 测试
 
-当前自动化测试覆盖SDS/RAG、Demo体验、JSA、隐患整改与仪表盘计算：**24/24 passed**。
+当前自动化测试覆盖SDS/RAG、Demo体验、JSA、隐患整改、仪表盘计算，以及V3工作流（路由/工具调用/LangGraph编排/新页面/Human-in-the-loop/Guardrail/时间线）：**91/91 passed**。
 
 ```powershell
 python -m unittest discover -s tests -p "test_*.py" -v

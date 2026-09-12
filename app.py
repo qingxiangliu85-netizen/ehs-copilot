@@ -31,6 +31,7 @@ from rag import (
     collect_sources,
     retrieve_documents,
 )
+from workflow.ui import render_workflow_page
 
 
 EXAMPLE_QUESTIONS = (
@@ -619,7 +620,13 @@ with st.sidebar:
     st.subheader("功能导航")
     selected_page = st.radio(
         "功能导航",
-        ("EHS仪表盘", "SDS智能检索", "JSA风险评估", "隐患整改管理"),
+        (
+            "EHS仪表盘",
+            "SDS智能检索",
+            "JSA风险评估",
+            "隐患整改管理",
+            "AI工作流助手",
+        ),
         index=1,
         label_visibility="collapsed",
     )
@@ -647,6 +654,33 @@ if selected_page == "隐患整改管理":
             "示例数据仅用于功能演示；实际隐患整改应依据企业制度和现场要求执行。"
         )
     render_hazard_page()
+    st.stop()
+
+if selected_page == "AI工作流助手":
+    with st.sidebar:
+        st.divider()
+        st.warning(
+            "工作流自动生成的 JSA 与隐患记录均为草稿，须经人工确认后方可作为正式记录。"
+        )
+    # The workflow assistant may need an SDS knowledge base; reuse the same
+    # Demo bootstrap as the SDS page so the two pages behave consistently.
+    if (
+        st.session_state.vector_store is None
+        and not st.session_state.auto_demo_attempted
+    ):
+        st.session_state.auto_demo_attempted = True
+        try:
+            with st.spinner("正在自动加载 Synthetic SDS 并建立 Demo 知识库……"):
+                demo_result = build_knowledge_base([LocalDemoPDF(DEMO_SDS_PATH)])
+            activate_knowledge_base(demo_result, mode="demo")
+        except Exception as exc:
+            st.session_state.auto_demo_error = str(exc)
+    render_workflow_page(
+        vector_store=st.session_state.vector_store,
+        jsa_records=st.session_state.jsa_records,
+        hazard_records=st.session_state.hazard_records,
+        loaded_files=tuple(st.session_state.loaded_files),
+    )
     st.stop()
 
 llm_available = is_llm_configured()
