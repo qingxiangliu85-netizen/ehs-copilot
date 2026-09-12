@@ -1,0 +1,431 @@
+{
+  "case_count": 30,
+  "metrics": {
+    "routing_accuracy": {
+      "value": 100.0,
+      "passed": 30,
+      "total": 30
+    },
+    "tool_call_accuracy": {
+      "value": 100.0,
+      "passed": 30,
+      "total": 30
+    },
+    "citation_coverage": {
+      "value": 85.7,
+      "passed": 6,
+      "total": 7,
+      "withheld_correctly": 5,
+      "withheld_total": 5
+    },
+    "citation_coverage_automated_path": {
+      "value": 100.0,
+      "passed": 6,
+      "total": 6,
+      "human_override": 1,
+      "human_override_confirmed": 1
+    },
+    "approval_compliance": {
+      "value": 100.0,
+      "passed": 148,
+      "total": 148
+    },
+    "workflow_completion": {
+      "value": 100.0,
+      "passed": 30,
+      "total": 30
+    }
+  },
+  "checks": [],
+  "by_category": {
+    "chemical_mismatch": {
+      "total": 2,
+      "routing": 2,
+      "tools": 2,
+      "completion": 2
+    },
+    "combined": {
+      "total": 3,
+      "routing": 3,
+      "tools": 3,
+      "completion": 3
+    },
+    "dashboard": {
+      "total": 3,
+      "routing": 3,
+      "tools": 3,
+      "completion": 3
+    },
+    "emergency": {
+      "total": 2,
+      "routing": 2,
+      "tools": 2,
+      "completion": 2
+    },
+    "evidence_gap": {
+      "total": 3,
+      "routing": 3,
+      "tools": 3,
+      "completion": 3
+    },
+    "hazard_write": {
+      "total": 9,
+      "routing": 9,
+      "tools": 9,
+      "completion": 9
+    },
+    "jsa_risk": {
+      "total": 4,
+      "routing": 4,
+      "tools": 4,
+      "completion": 4
+    },
+    "sds_query": {
+      "total": 4,
+      "routing": 4,
+      "tools": 4,
+      "completion": 4
+    }
+  },
+  "failures": [],
+  "sds_delivered_answers": 7,
+  "sds_withheld_answers": 5,
+  "sds_scenarios_total": 12,
+  "sds_automated_deliveries": 6,
+  "sds_human_override_deliveries": 1,
+  "generated_at": "2026-09-12 21:07:16 +0800",
+  "llm_configured": false,
+  "wall_ms": 544,
+  "per_case": [
+    {
+      "id": "sds-01",
+      "category": "sds_query",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 59
+    },
+    {
+      "id": "sds-02",
+      "category": "sds_query",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 33
+    },
+    {
+      "id": "sds-03",
+      "category": "sds_query",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 34
+    },
+    {
+      "id": "sds-04",
+      "category": "sds_query",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 35
+    },
+    {
+      "id": "jsa-01",
+      "category": "jsa_risk",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 8
+    },
+    {
+      "id": "jsa-02",
+      "category": "jsa_risk",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 11
+    },
+    {
+      "id": "jsa-03",
+      "category": "jsa_risk",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 9
+    },
+    {
+      "id": "jsa-04",
+      "category": "jsa_risk",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 9
+    },
+    {
+      "id": "hz-01",
+      "category": "hazard_write",
+      "status": "completed",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 14
+    },
+    {
+      "id": "hz-02",
+      "category": "hazard_write",
+      "status": "rejected",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 7
+    },
+    {
+      "id": "hz-03",
+      "category": "hazard_write",
+      "status": "completed",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 11
+    },
+    {
+      "id": "hz-04",
+      "category": "hazard_write",
+      "status": "completed",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 11
+    },
+    {
+      "id": "hz-05",
+      "category": "hazard_write",
+      "status": "rejected",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 8
+    },
+    {
+      "id": "hz-06",
+      "category": "hazard_write",
+      "status": "rejected",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 8
+    },
+    {
+      "id": "hz-07",
+      "category": "hazard_write",
+      "status": "awaiting_approval",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 4
+    },
+    {
+      "id": "hz-08",
+      "category": "hazard_write",
+      "status": "rejected",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 7
+    },
+    {
+      "id": "hz-09",
+      "category": "hazard_write",
+      "status": "completed",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 10
+    },
+    {
+      "id": "dash-01",
+      "category": "dashboard",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 8
+    },
+    {
+      "id": "dash-02",
+      "category": "dashboard",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 9
+    },
+    {
+      "id": "dash-03",
+      "category": "dashboard",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 7
+    },
+    {
+      "id": "mix-01",
+      "category": "combined",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 31
+    },
+    {
+      "id": "mix-02",
+      "category": "combined",
+      "status": "completed",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 36
+    },
+    {
+      "id": "mix-03",
+      "category": "combined",
+      "status": "completed",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 12
+    },
+    {
+      "id": "emg-01",
+      "category": "emergency",
+      "status": "completed",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 4
+    },
+    {
+      "id": "emg-02",
+      "category": "emergency",
+      "status": "blocked",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 35
+    },
+    {
+      "id": "ev-01",
+      "category": "evidence_gap",
+      "status": "blocked",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 11
+    },
+    {
+      "id": "ev-02",
+      "category": "evidence_gap",
+      "status": "completed",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 11
+    },
+    {
+      "id": "ev-03",
+      "category": "evidence_gap",
+      "status": "blocked",
+      "paused": true,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 11
+    },
+    {
+      "id": "mm-01",
+      "category": "chemical_mismatch",
+      "status": "blocked",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 33
+    },
+    {
+      "id": "mm-02",
+      "category": "chemical_mismatch",
+      "status": "blocked",
+      "paused": false,
+      "routing_ok": true,
+      "tools_ok": true,
+      "completion_ok": true,
+      "approval_ok": true,
+      "elapsed_ms": 33
+    }
+  ]
+}
