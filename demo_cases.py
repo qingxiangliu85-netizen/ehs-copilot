@@ -27,6 +27,7 @@ from typing import Mapping
 
 from hazards import DEMO_DATA_LABEL, create_hazard_record
 from jobs import create_job
+from job_review import attach_public_evidence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -310,6 +311,7 @@ def create_demo_hf_case(
         job_name=str(HF_JOB_CASE["job_name"]),
         job_type=str(HF_JOB_CASE["job_type"]),
         chemicals=HF_CHEMICALS,
+        steps=list(HF_STEPS),
         sds_evidence=[],
         jsa_draft=None,
         created_by=HF_SITE["requester"],
@@ -317,6 +319,7 @@ def create_demo_hf_case(
         now=now,
     )
     job["area"] = HF_SITE["area"]
+    attach_public_evidence(job, public_items)
 
     hazards: list[dict[str, object]] = []
     for template in HF_HAZARD_TEMPLATES:

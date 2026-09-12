@@ -71,6 +71,8 @@ JOB_FIELDS: tuple[str, ...] = (
     "job_type",
     "status",
     "chemicals",
+    "steps",
+    "public_evidence",
     "sds_evidence",
     "jsa_draft",
     "jsa_confirmation",
@@ -130,6 +132,20 @@ def _normalise_chemicals(
     return rows
 
 
+def _normalise_steps(
+    steps: Iterable[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    rows = _as_dict_list(steps, "steps")
+    for index, row in enumerate(rows, start=1):
+        name = str(row.get("name", "") or row.get("步骤", "") or "").strip()
+        if not name:
+            raise ValueError(f"steps 第 {index} 项缺少步骤名称（name）。")
+        row["name"] = name
+        row["note"] = str(row.get("note", "") or "").strip()
+        row.setdefault("order", index)
+    return rows
+
+
 def next_job_id(records: Iterable[Mapping[str, object]]) -> str:
     """Generate the next session-only ``JOB-###`` identifier."""
     return _next_job_id(record.get("job_id", "") for record in records)
@@ -141,6 +157,7 @@ def create_job(
     job_type: str = DEFAULT_JOB_TYPE,
     job_id: str = "",
     chemicals: Iterable[Mapping[str, object]] | None = None,
+    steps: Iterable[Mapping[str, object]] | None = None,
     sds_evidence: Iterable[Mapping[str, object]] | None = None,
     jsa_draft: Mapping[str, object] | None = None,
     created_by: str = "",
@@ -150,9 +167,11 @@ def create_job(
 ) -> dict[str, object]:
     """Create one validated job record in the initial ``草稿`` status.
 
-    ``chemicals`` entries follow ``{"name", "sds_file", "aliases"}``; the
-    ``sds_evidence`` entries keep the shape produced by ``search_sds``
-    (``source`` / ``page`` / ``sections`` / ``snippet``).
+    ``chemicals`` entries follow ``{"name", "sds_file", "aliases"}``; ``steps``
+    entries follow ``{"order", "name", "note"}``; the ``sds_evidence`` entries
+    keep the shape produced by ``search_sds`` (``source`` / ``page`` /
+    ``sections`` / ``snippet``).  Public-source evidence is attached later via
+    ``job_review.attach_public_evidence`` so the two tracks stay separate.
     """
     name = str(job_name or "").strip()
     if not name:
@@ -176,6 +195,8 @@ def create_job(
         "job_type": kind,
         "status": JOB_STATUS_DRAFT,
         "chemicals": _normalise_chemicals(chemicals),
+        "steps": _normalise_steps(steps),
+        "public_evidence": [],
         "sds_evidence": _as_dict_list(sds_evidence, "sds_evidence"),
         "jsa_draft": dict(jsa_draft) if jsa_draft is not None else None,
         "jsa_confirmation": None,

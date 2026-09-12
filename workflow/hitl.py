@@ -66,6 +66,7 @@ OP_MAJOR_RISK_WRITE = "major_risk_write"
 OP_RISK_DOWNGRADE = "risk_downgrade"
 OP_SDS_INSUFFICIENT = "sds_insufficient_evidence"
 OP_SDS_CONFLICT = "sds_source_conflict"
+OP_APPROVE_JOB = "approve_job"
 
 OPERATION_LABELS: dict[str, str] = {
     OP_CREATE_HAZARD: "创建隐患",
@@ -75,6 +76,7 @@ OPERATION_LABELS: dict[str, str] = {
     OP_RISK_DOWNGRADE: "AI 建议降低风险等级",
     OP_SDS_INSUFFICIENT: "SDS 证据不足后继续",
     OP_SDS_CONFLICT: "SDS 来源冲突后继续",
+    OP_APPROVE_JOB: "批准作业单",
 }
 
 # When one plan carries several risky calls, the aggregated request is labelled
@@ -302,6 +304,7 @@ __all__ = [
     "MAX_APPROVAL_ROUNDS",
     "OPERATION_LABELS",
     "OPERATION_PRIORITY",
+    "OP_APPROVE_JOB",
     "OP_CLOSE_HAZARD",
     "OP_CREATE_HAZARD",
     "OP_MAJOR_RISK_WRITE",
