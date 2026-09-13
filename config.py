@@ -38,6 +38,10 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").stri
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 LLM_TIMEOUT_SECONDS = _env_int("LLM_TIMEOUT_SECONDS", 60)
 
+# V5 P0A: SQLite prototype store.  An empty value falls back to
+# ``data/ehs_copilot.db``; tests always pass their own temporary path.
+EHS_DB_PATH = os.getenv("EHS_DB_PATH", "").strip()
+
 NOT_FOUND_MESSAGE = "当前 SDS 知识库中未找到相关信息。"
 SAFETY_DISCLAIMER = (
     "AI 输出仅用于信息检索辅助。实际操作前请核对原始 SDS 及所在单位 EHS 制度。"

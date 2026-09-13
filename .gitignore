@@ -50,3 +50,9 @@ data/faiss_index/*
 !data/faiss_index/.gitkeep
 *.faiss
 *.pkl
+
+# V5 prototype SQLite store (local demo data only)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
