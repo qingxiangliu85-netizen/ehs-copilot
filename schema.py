@@ -13,13 +13,23 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 DDL_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS schema_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        is_demo INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
     );
     """,
     """
@@ -37,6 +47,8 @@ DDL_STATEMENTS: tuple[str, ...] = (
         residual_risk_level TEXT NOT NULL DEFAULT '',
         control_measures TEXT NOT NULL DEFAULT '',
         designated_approver_id TEXT NOT NULL DEFAULT '',
+        ehs_reviewer_id TEXT NOT NULL DEFAULT '',
+        approval_due_at TEXT NOT NULL DEFAULT '',
         valid_from TEXT NOT NULL DEFAULT '',
         valid_to TEXT NOT NULL DEFAULT '',
         handback_note TEXT NOT NULL DEFAULT '',
@@ -193,11 +205,15 @@ DDL_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_events (entity_type, entity_id, created_at);",
     "CREATE INDEX IF NOT EXISTS idx_audit_correlation ON audit_events (correlation_id);",
     "CREATE INDEX IF NOT EXISTS idx_permits_status ON permits (status);",
+    "CREATE INDEX IF NOT EXISTS idx_permits_owner ON permits (owner_id);",
+    "CREATE INDEX IF NOT EXISTS idx_permits_approver ON permits (designated_approver_id);",
     "CREATE INDEX IF NOT EXISTS idx_hazards_permit ON hazards (permit_id, status);",
+    "CREATE INDEX IF NOT EXISTS idx_hazards_owner ON hazards (owner_id, status);",
 )
 
 EXPECTED_TABLES: tuple[str, ...] = (
     "schema_meta",
+    "users",
     "permits",
     "permit_chemicals",
     "permit_steps",
@@ -211,11 +227,30 @@ EXPECTED_TABLES: tuple[str, ...] = (
 )
 
 
+_COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("permits", "ehs_reviewer_id", "TEXT NOT NULL DEFAULT ''"),
+    ("permits", "approval_due_at", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _ensure_column(
+    connection: sqlite3.Connection, table: str, column: str, definition: str
+) -> None:
+    existing = {
+        str(row[1])
+        for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in existing:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def initialize(connection: sqlite3.Connection) -> sqlite3.Connection:
-    """Create every table if missing and record the schema version."""
+    """Create every table if missing, apply additive columns and record the version."""
     connection.executescript("\n".join(DDL_STATEMENTS))
+    for table, column, definition in _COLUMN_MIGRATIONS:
+        _ensure_column(connection, table, column, definition)
     connection.execute(
-        "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', ?)",
+        "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', ?)",
         (SCHEMA_VERSION,),
     )
     connection.commit()

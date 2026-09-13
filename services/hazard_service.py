@@ -14,9 +14,9 @@ from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 from hazards import RISK_LEVELS
-from workflow import audit, hazard_state, roles
+from workflow import audit, hazard_state, permissions, roles, sla
 
-from . import legacy_adapter
+from . import legacy_adapter, persona_service
 
 
 DEFAULT_HAZARD_TYPE = "其他"
@@ -31,7 +31,13 @@ _SNAPSHOT_FIELDS = (
     "owner_id",
     "verifier_id",
     "verification_result",
+    "verification_notes",
+    "verified_at",
     "due_at",
+    "verification_due_at",
+    "reopened_reason",
+    "closed_by",
+    "closed_at",
     "data_label",
     "is_demo",
 )
@@ -39,6 +45,17 @@ _SNAPSHOT_FIELDS = (
 
 def _stamp(now: datetime | None = None) -> str:
     return (now or datetime.now()).isoformat(timespec="seconds")
+
+
+def _resolve_actor(
+    user: Mapping[str, Any] | None, actor: str, actor_role: str
+) -> tuple[str, str]:
+    """Return the effective (actor id, role) for one command call."""
+    if user is None:
+        return str(actor or "").strip(), str(actor_role or "").strip()
+    resolved_actor = permissions.user_id(user) or str(actor or "").strip()
+    resolved_role = permissions.user_role(user) or str(actor_role or "").strip()
+    return resolved_actor, resolved_role
 
 
 def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -243,6 +260,8 @@ def create_hazard(
     data_label: str = "",
     is_demo: bool | None = None,
     actor: str = "",
+    user: Mapping[str, Any] | None = None,
+    allow_non_draft: bool = False,
     audit_action: str = "hazard.created",
     created_at: object = "",
     updated_at: object = "",
@@ -255,21 +274,28 @@ def create_hazard(
     state = str(status or "").strip()
     if state not in hazard_state.HAZARD_STATUSES:
         raise ValueError(f"未知隐患状态：{status!r}。")
+    if state != hazard_state.HAZARD_OPEN and not allow_non_draft:
+        raise ValueError(
+            "新建隐患只能从 open 状态开始；其他状态必须通过状态机命令或导入进入。"
+        )
     level = str(risk_level or "").strip() or DEFAULT_RISK_LEVEL
     if level not in RISK_LEVELS:
         raise ValueError(f"风险等级必须是 {RISK_LEVELS} 之一，当前为 {risk_level!r}。")
+    if user is not None:
+        permissions.assert_can(user, permissions.HAZARD_CREATE)
 
     identifier = str(hazard_id or "").strip() or next_hazard_id(connection)
     if _hazard_row(connection, identifier) is not None:
         raise ValueError(f"隐患编号已存在：{identifier}。")
 
     stamp = _stamp(now)
+    effective_actor = permissions.user_id(user) or str(actor or "").strip()
     action_rows = [
         _normalise_action(item, index)
         for index, item in enumerate(corrective_actions, start=1)
     ]
     evidence_rows = [
-        _normalise_evidence(item, index, fallback_actor=str(actor), stamp=stamp)
+        _normalise_evidence(item, index, fallback_actor=effective_actor, stamp=stamp)
         for index, item in enumerate(evidence, start=1)
     ]
 
@@ -278,6 +304,9 @@ def create_hazard(
     verification_data = dict(verification or {})
     created_stamp = str(created_at or "").strip() or stamp
     updated_stamp = str(updated_at or "").strip() or stamp
+    resolved_due = str(due_at or "").strip() or sla.calculate_due_at(
+        now or datetime.now(), sla.rectification_days(level)
+    ).isoformat(timespec="seconds")
     correlation = audit.new_correlation_id()
 
     with connection:
@@ -299,7 +328,7 @@ def create_hazard(
                 str(reported_by_id or "").strip(),
                 str(owner_id or "").strip(),
                 state,
-                str(due_at or "").strip(),
+                resolved_due,
                 str(verification_due_at or "").strip(),
                 str(verification_data.get("result", "")).strip(),
                 str(verification_data.get("notes", "")).strip(),
@@ -323,7 +352,7 @@ def create_hazard(
                 entity_type=audit.ENTITY_HAZARD,
                 entity_id=identifier,
                 action=str(audit_action or "hazard.created"),
-                actor=str(actor or "").strip(),
+                actor=effective_actor,
                 from_state="",
                 to_state=state,
                 reason="",
@@ -396,23 +425,29 @@ def transition_hazard(
     hazard_id: str,
     action: str,
     *,
-    actor: str,
+    actor: str = "",
     actor_role: str = "",
     reason: str = "",
     context: Mapping[str, Any] | None = None,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Validate and apply one hazard transition with its audit event."""
     hazard = get_hazard(connection, hazard_id)
     if hazard is None:
         raise KeyError(f"未找到隐患：{hazard_id}")
+    effective_actor, effective_role = _resolve_actor(user, actor, actor_role)
+    if user is not None:
+        permission = permissions.permission_for_hazard_action(action)
+        if permission:
+            permissions.assert_can(user, permission, entity=hazard)
     values = _hazard_context(connection, hazard)
     values.update(dict(context or {}))
     result = hazard_state.validate_hazard_transition(
         str(hazard.get("status", "")),
         action,
-        actor_role=actor_role,
-        actor_id=actor,
+        actor_role=effective_role,
+        actor_id=effective_actor,
         owner_id=str(hazard.get("owner_id", "")),
         reason=reason,
         context=values,
@@ -424,7 +459,7 @@ def transition_hazard(
         hazard,
         action,
         result.to_status,
-        actor=str(actor or "").strip(),
+        actor=effective_actor,
         reason=str(reason or "").strip(),
         now=now,
     )
@@ -436,13 +471,19 @@ def assign_hazard(
     hazard_id: str,
     *,
     owner_id: str,
-    actor: str,
+    actor: str = "",
     due_at: object = "",
     reason: str = "",
     actor_role: str = roles.ROLE_EHS_REVIEWER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """open/reopened/assigned → assigned, recording the new owner."""
+    if user is not None:
+        target = persona_service.require_role_user(
+            connection, owner_id, permissions.HAZARD_START_RECTIFICATION
+        )
+        owner_id = str(target["id"])
     extra: dict[str, Any] = {"owner_id": str(owner_id or "").strip()}
     if str(due_at or "").strip():
         extra["due_at"] = str(due_at).strip()
@@ -455,16 +496,77 @@ def assign_hazard(
         reason=reason,
         context={"target_owner_id": owner_id},
         extra=extra,
+        user=user,
         now=now,
     )
+
+
+def assign_hazard_verifier(
+    connection: sqlite3.Connection,
+    hazard_id: str,
+    *,
+    verifier_id: str,
+    actor: str = "",
+    user: Mapping[str, Any] | None = None,
+    reason: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Assign the expected verifier of one hazard to an active demo user."""
+    hazard = get_hazard(connection, hazard_id)
+    if hazard is None:
+        raise KeyError(f"未找到隐患：{hazard_id}")
+    if str(hazard.get("status", "")) == hazard_state.HAZARD_CLOSED:
+        raise ValueError("已关闭的隐患不能变更验证人。")
+    if user is not None:
+        permissions.assert_can(user, permissions.HAZARD_ASSIGN, entity=hazard)
+    target = persona_service.require_role_user(
+        connection, verifier_id, permissions.HAZARD_VERIFY
+    )
+    owner = str(hazard.get("owner_id", "") or "").strip()
+    if owner and owner == str(target["id"]):
+        raise ValueError("整改负责人不能同时被指派为验证人（职责分离）。")
+    effective_actor = permissions.user_id(user) or str(actor or "").strip()
+    before = {
+        "id": hazard.get("id", ""),
+        "status": hazard.get("status", ""),
+        "verifier_id": hazard.get("verifier_id", ""),
+    }
+    stamp = _stamp(now)
+    with connection:
+        connection.execute(
+            "UPDATE hazards SET verifier_id = ?, updated_at = ? WHERE id = ?",
+            (str(target["id"]), stamp, str(hazard_id)),
+        )
+        audit.record_event(
+            connection,
+            audit.build_event(
+                entity_type=audit.ENTITY_HAZARD,
+                entity_id=str(hazard_id),
+                action="hazard.assign_verifier",
+                actor=effective_actor,
+                from_state=str(hazard.get("status", "")),
+                to_state=str(hazard.get("status", "")),
+                reason=str(reason or "").strip()
+                or f"指派验证人为 {target['display_name']}",
+                before=before,
+                after={
+                    **before,
+                    "verifier_id": str(target["id"]),
+                    "updated_at": stamp,
+                },
+                now=now,
+            ),
+        )
+    return get_hazard(connection, str(hazard_id))
 
 
 def start_rectification(
     connection: sqlite3.Connection,
     hazard_id: str,
     *,
-    actor: str,
+    actor: str = "",
     actor_role: str = roles.ROLE_ACTION_OWNER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """assigned → in_progress, executed by the assigned owner."""
@@ -474,6 +576,7 @@ def start_rectification(
         "start",
         actor=actor,
         actor_role=actor_role,
+        user=user,
         now=now,
     )
 
@@ -482,19 +585,25 @@ def submit_rectification(
     connection: sqlite3.Connection,
     hazard_id: str,
     *,
-    actor: str,
+    actor: str = "",
     evidence: Iterable[Mapping[str, Any]],
     notes: str = "",
     actor_role: str = roles.ROLE_ACTION_OWNER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """in_progress → verification_pending, attaching rectification evidence."""
     hazard = get_hazard(connection, hazard_id)
     if hazard is None:
         raise KeyError(f"未找到隐患：{hazard_id}")
+    effective_actor, effective_role = _resolve_actor(user, actor, actor_role)
+    if user is not None:
+        permissions.assert_can(
+            user, permissions.HAZARD_SUBMIT_RECTIFICATION, entity=hazard
+        )
     stamp = _stamp(now)
     evidence_rows = [
-        _normalise_evidence(item, index, fallback_actor=str(actor), stamp=stamp)
+        _normalise_evidence(item, index, fallback_actor=effective_actor, stamp=stamp)
         for index, item in enumerate(evidence, start=1)
     ]
     if not evidence_rows:
@@ -502,8 +611,8 @@ def submit_rectification(
     result = hazard_state.validate_hazard_transition(
         str(hazard.get("status", "")),
         "submit_rectification",
-        actor_role=actor_role,
-        actor_id=actor,
+        actor_role=effective_role,
+        actor_id=effective_actor,
         owner_id=str(hazard.get("owner_id", "")),
         reason=notes,
         context={
@@ -513,14 +622,21 @@ def submit_rectification(
     )
     if not result.allowed:
         raise ValueError(result.message)
+    extra: dict[str, Any] = {
+        "verification_due_at": sla.calculate_due_at(
+            now or datetime.now(),
+            sla.verification_days(str(hazard.get("risk_level", ""))),
+        ).isoformat(timespec="seconds")
+    }
     _write_transition(
         connection,
         hazard,
         "submit_rectification",
         result.to_status,
-        actor=str(actor or "").strip(),
+        actor=effective_actor,
         reason=str(notes or "").strip(),
         notes=str(notes or "").strip(),
+        extra=extra,
         evidence_rows=evidence_rows,
         is_demo=bool(hazard.get("is_demo")),
         now=now,
@@ -532,16 +648,20 @@ def verify_hazard(
     connection: sqlite3.Connection,
     hazard_id: str,
     *,
-    actor: str,
+    actor: str = "",
     result: str,
     notes: str,
     actor_role: str = roles.ROLE_EHS_REVIEWER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """verification_pending → closed (pass) or reopened (fail)."""
     hazard = get_hazard(connection, hazard_id)
     if hazard is None:
         raise KeyError(f"未找到隐患：{hazard_id}")
+    effective_actor, effective_role = _resolve_actor(user, actor, actor_role)
+    if user is not None:
+        permissions.assert_can(user, permissions.HAZARD_VERIFY, entity=hazard)
     decision = str(result or "").strip()
     if decision not in {"pass", "fail"}:
         raise ValueError("验证结果必须是 pass 或 fail。")
@@ -555,20 +675,20 @@ def verify_hazard(
     extra: dict[str, Any] = {
         "verification_result": decision,
         "verification_notes": text,
-        "verifier_id": str(actor or "").strip(),
+        "verifier_id": effective_actor,
         "verified_at": stamp,
         "reopened_reason": "",
     }
     if decision == "pass":
-        extra["closed_by"] = str(actor or "").strip()
+        extra["closed_by"] = effective_actor
         extra["closed_at"] = stamp
     else:
         extra["reopened_reason"] = text
     machine = hazard_state.validate_hazard_transition(
         str(hazard.get("status", "")),
         action,
-        actor_role=actor_role,
-        actor_id=actor,
+        actor_role=effective_role,
+        actor_id=effective_actor,
         owner_id=str(hazard.get("owner_id", "")),
         reason=text,
         context={
@@ -583,7 +703,7 @@ def verify_hazard(
         hazard,
         action,
         machine.to_status,
-        actor=str(actor or "").strip(),
+        actor=effective_actor,
         reason=text,
         notes=text,
         extra=extra,
@@ -596,15 +716,23 @@ def reopen_hazard(
     connection: sqlite3.Connection,
     hazard_id: str,
     *,
-    actor: str,
+    actor: str = "",
     reason: str,
     actor_role: str = roles.ROLE_EHS_REVIEWER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """closed → reopened; a reason is mandatory and previous verification is cleared."""
     text = str(reason or "").strip()
     if not text:
         raise ValueError("重新打开隐患必须填写原因（reason）。")
+    hazard = get_hazard(connection, hazard_id)
+    if hazard is None:
+        raise KeyError(f"未找到隐患：{hazard_id}")
+    new_due = sla.calculate_due_at(
+        now or datetime.now(),
+        sla.rectification_days(str(hazard.get("risk_level", ""))),
+    ).isoformat(timespec="seconds")
     return _apply_with_extra(
         connection,
         hazard_id,
@@ -612,6 +740,7 @@ def reopen_hazard(
         actor=actor,
         actor_role=actor_role,
         reason=text,
+        user=user,
         extra={
             "verification_result": "",
             "verification_notes": "",
@@ -620,6 +749,7 @@ def reopen_hazard(
             "closed_by": "",
             "closed_at": "",
             "reopened_reason": text,
+            "due_at": new_due,
         },
         now=now,
     )
@@ -630,23 +760,29 @@ def _apply_with_extra(
     hazard_id: str,
     action: str,
     *,
-    actor: str,
+    actor: str = "",
     actor_role: str,
     reason: str,
     context: Mapping[str, Any] | None = None,
     extra: Mapping[str, Any] | None = None,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     hazard = get_hazard(connection, hazard_id)
     if hazard is None:
         raise KeyError(f"未找到隐患：{hazard_id}")
+    effective_actor, effective_role = _resolve_actor(user, actor, actor_role)
+    if user is not None:
+        permission = permissions.permission_for_hazard_action(action)
+        if permission:
+            permissions.assert_can(user, permission, entity=hazard)
     values = _hazard_context(connection, hazard)
     values.update(dict(context or {}))
     result = hazard_state.validate_hazard_transition(
         str(hazard.get("status", "")),
         action,
-        actor_role=actor_role,
-        actor_id=actor,
+        actor_role=effective_role,
+        actor_id=effective_actor,
         owner_id=str(hazard.get("owner_id", "")),
         reason=reason,
         context=values,
@@ -658,7 +794,7 @@ def _apply_with_extra(
         hazard,
         action,
         result.to_status,
-        actor=str(actor or "").strip(),
+        actor=effective_actor,
         reason=str(reason or "").strip(),
         extra=extra,
         now=now,
@@ -703,6 +839,7 @@ def import_legacy_hazard(
         is_demo=bool(mapped.get("is_demo")),
         actor=actor,
         audit_action="hazard.imported",
+        allow_non_draft=True,
         created_at=mapped.get("created_at", ""),
         updated_at=mapped.get("created_at", ""),
         now=now,
@@ -713,6 +850,7 @@ __all__ = [
     "DEFAULT_HAZARD_TYPE",
     "DEFAULT_RISK_LEVEL",
     "assign_hazard",
+    "assign_hazard_verifier",
     "create_hazard",
     "get_hazard",
     "import_legacy_hazard",

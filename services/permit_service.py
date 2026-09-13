@@ -20,9 +20,9 @@ from typing import Any, Iterable, Mapping
 
 import jsa
 from job_review import attach_public_evidence, attach_sds_evidence
-from workflow import audit, permit_state, roles
+from workflow import audit, permit_state, permissions, roles, sla
 
-from . import legacy_adapter
+from . import legacy_adapter, persona_service
 
 
 DEFAULT_PERMIT_TYPE = "危化品非例行作业"
@@ -41,6 +41,11 @@ _SNAPSHOT_FIELDS = (
     "risk_level",
     "residual_risk_level",
     "control_measures",
+    "applicant_id",
+    "owner_id",
+    "designated_approver_id",
+    "ehs_reviewer_id",
+    "approval_due_at",
     "valid_from",
     "valid_to",
     "handback_note",
@@ -53,6 +58,17 @@ _SNAPSHOT_FIELDS = (
 
 def _stamp(now: datetime | None = None) -> str:
     return (now or datetime.now()).isoformat(timespec="seconds")
+
+
+def _resolve_actor(
+    user: Mapping[str, Any] | None, actor: str, actor_role: str
+) -> tuple[str, str]:
+    """Return the effective (actor id, role) for one command call."""
+    if user is None:
+        return str(actor or "").strip(), str(actor_role or "").strip()
+    resolved_actor = permissions.user_id(user) or str(actor or "").strip()
+    resolved_role = permissions.user_role(user) or str(actor_role or "").strip()
+    return resolved_actor, resolved_role
 
 
 def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -346,6 +362,7 @@ def create_permit(
     residual_risk_level: str = "",
     control_measures: str = "",
     designated_approver_id: str = "",
+    ehs_reviewer_id: str = "",
     valid_from: object = "",
     valid_to: object = "",
     handback_note: str = "",
@@ -359,6 +376,8 @@ def create_permit(
     evidence: Iterable[Mapping[str, Any]] = (),
     jsa_items: Iterable[Mapping[str, Any]] = (),
     actor: str = "",
+    user: Mapping[str, Any] | None = None,
+    allow_non_draft: bool = False,
     audit_action: str = "permit.created",
     created_at: str = "",
     updated_at: str = "",
@@ -372,6 +391,12 @@ def create_permit(
     state = str(status or "").strip()
     if state not in permit_state.PERMIT_STATUSES:
         raise ValueError(f"未知作业许可状态：{status!r}。")
+    if state != permit_state.PERMIT_DRAFT and not allow_non_draft:
+        raise ValueError(
+            "新建作业许可只能从草稿状态开始；其他状态必须通过状态机命令或导入进入。"
+        )
+    if user is not None:
+        permissions.assert_can(user, permissions.PERMIT_CREATE)
 
     identifier = str(permit_id or "").strip() or next_permit_id(connection)
     if _permit_row(connection, identifier) is not None:
@@ -427,15 +452,17 @@ def create_permit(
     created_stamp = str(created_at or "").strip() or stamp
     updated_stamp = str(updated_at or "").strip() or stamp
     correlation = audit.new_correlation_id()
+    created_by = permissions.user_id(user) or str(actor or "").strip()
 
     with connection:
         connection.execute(
             "INSERT INTO permits ("
             "id, title, permit_type, site, area, equipment, applicant_id, owner_id, "
             "status, risk_level, residual_risk_level, control_measures, "
-            "designated_approver_id, valid_from, valid_to, handback_note, closure_note, "
+            "designated_approver_id, ehs_reviewer_id, valid_from, valid_to, "
+            "handback_note, closure_note, "
             "closed_by, closed_at, version, data_label, is_demo, created_at, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
             (
                 identifier,
                 name,
@@ -450,6 +477,7 @@ def create_permit(
                 str(residual_risk_level or "").strip(),
                 str(control_measures or "").strip(),
                 str(designated_approver_id or "").strip(),
+                str(ehs_reviewer_id or "").strip(),
                 str(valid_from or "").strip(),
                 str(valid_to or "").strip(),
                 str(handback_note or "").strip(),
@@ -481,7 +509,7 @@ def create_permit(
                 entity_type=audit.ENTITY_PERMIT,
                 entity_id=identifier,
                 action=str(audit_action or "permit.created"),
-                actor=str(actor or "").strip(),
+                actor=created_by,
                 from_state="",
                 to_state=state,
                 reason="",
@@ -500,7 +528,8 @@ def add_evidence(
     *,
     track: str,
     item: Mapping[str, Any],
-    actor: str,
+    actor: str = "",
+    user: Mapping[str, Any] | None = None,
     is_demo: bool | None = None,
     data_label: str = "",
     now: datetime | None = None,
@@ -509,6 +538,9 @@ def add_evidence(
     permit = get_permit(connection, permit_id)
     if permit is None:
         raise KeyError(f"未找到作业许可：{permit_id}")
+    if user is not None:
+        permissions.assert_can(user, permissions.PERMIT_EDIT, entity=permit)
+    effective_actor = permissions.user_id(user) or str(actor or "").strip()
     kind = str(track or "").strip()
     rows = _normalise_evidence(kind, [item])
     if not rows:
@@ -541,7 +573,7 @@ def add_evidence(
                 entity_type=audit.ENTITY_PERMIT,
                 entity_id=str(permit_id),
                 action="permit.evidence_added",
-                actor=actor,
+                actor=effective_actor,
                 from_state=str(permit.get("status", "")),
                 to_state=str(permit.get("status", "")),
                 reason=f"追加证据轨道 {kind}",
@@ -725,36 +757,58 @@ def transition_permit(
     permit_id: str,
     action: str,
     *,
-    actor: str,
+    actor: str = "",
     actor_role: str = "",
     reason: str = "",
     context: Mapping[str, Any] | None = None,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Validate and apply one permit transition with its audit event."""
+    """Validate and apply one permit transition with its audit event.
+
+    ``user`` is the Demo persona mapping.  When supplied, the permission layer
+    runs first (who may attempt the action) and the state machine second
+    (whether the status allows it); both must pass.
+    """
     permit = get_permit(connection, permit_id)
     if permit is None:
         raise KeyError(f"未找到作业许可：{permit_id}")
+    effective_actor, effective_role = _resolve_actor(user, actor, actor_role)
+    if user is not None:
+        permission = permissions.permission_for_permit_action(action)
+        if permission:
+            permissions.assert_can(user, permission, entity=permit)
     values = _permit_context(connection, permit)
     values.update(dict(context or {}))
     result = permit_state.validate_permit_transition(
         str(permit.get("status", "")),
         action,
-        actor_role=actor_role,
-        actor_id=actor,
+        actor_role=effective_role,
+        actor_id=effective_actor,
         reason=reason,
         context=values,
         now=now,
     )
     if not result.allowed:
         raise ValueError(result.message)
+    extra: dict[str, Any] = {}
+    if action in {"submit", "resubmit"}:
+        risk = str(
+            permit.get("residual_risk_level", "")
+            or permit.get("risk_level", "")
+            or ""
+        )
+        extra["approval_due_at"] = sla.calculate_due_at(
+            now or datetime.now(), sla.approval_days(risk)
+        ).isoformat(timespec="seconds")
     _write_transition(
         connection,
         permit,
         action,
         result.to_status,
-        actor=str(actor or "").strip(),
+        actor=effective_actor,
         reason=str(reason or "").strip(),
+        extra=extra or None,
         now=now,
     )
     return get_permit(connection, str(permit_id))
@@ -764,8 +818,9 @@ def submit_permit(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     actor_role: str = roles.ROLE_APPLICANT,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """草稿 → 待EHS审核.  Requires chemicals, SDS evidence and JSA items."""
@@ -775,6 +830,7 @@ def submit_permit(
         "submit",
         actor=actor,
         actor_role=actor_role,
+        user=user,
         now=now,
     )
 
@@ -783,10 +839,11 @@ def complete_ehs_review(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     decision: str,
     reason: str = "",
     actor_role: str = roles.ROLE_EHS_REVIEWER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """EHS 审核结论：``confirm`` 进入审批，``return_draft`` 退回草稿。"""
@@ -800,6 +857,7 @@ def complete_ehs_review(
         actor=actor,
         actor_role=actor_role,
         reason=reason,
+        user=user,
         now=now,
     )
 
@@ -808,10 +866,11 @@ def decide_approval(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     decision: str,
     comment: str = "",
     actor_role: str = roles.ROLE_APPROVER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """批准人决定：``approve`` 进入已批准，``reject`` 退回到 returned。"""
@@ -821,8 +880,11 @@ def decide_approval(
     permit = _permit_row(connection, permit_id)
     if permit is None:
         raise KeyError(f"未找到作业许可：{permit_id}")
+    effective_actor, effective_role = _resolve_actor(user, actor, actor_role)
+    if user is not None:
+        permissions.assert_can(user, permissions.PERMIT_APPROVE, entity=permit)
     designated = str(permit.get("designated_approver_id", "") or "").strip()
-    if designated and str(actor or "").strip() != designated:
+    if designated and effective_actor != designated:
         raise ValueError(
             f"该作业许可指定批准人为 {designated}，当前操作人无权批准。"
         )
@@ -830,8 +892,8 @@ def decide_approval(
         connection,
         permit_id,
         action,
-        actor=actor,
-        actor_role=actor_role,
+        actor=effective_actor,
+        actor_role=effective_role,
         reason=comment,
         now=now,
     )
@@ -860,15 +922,21 @@ def confirm_prestart(
     permit_id: str,
     checks: Iterable[Mapping[str, Any]],
     *,
-    actor: str,
+    actor: str = "",
     actor_role: str = roles.ROLE_ACTION_OWNER,
     reason: str = "",
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Record the pre-start checks and activate the permit when all pass."""
     permit = get_permit(connection, permit_id)
     if permit is None:
         raise KeyError(f"未找到作业许可：{permit_id}")
+    effective_actor, effective_role = _resolve_actor(user, actor, actor_role)
+    if user is not None:
+        permissions.assert_can(
+            user, permissions.PERMIT_PRESTART_CONFIRM, entity=permit
+        )
     rows = [
         _normalise_check(item, index) for index, item in enumerate(checks, start=1)
     ]
@@ -881,8 +949,8 @@ def confirm_prestart(
     result = permit_state.validate_permit_transition(
         str(permit.get("status", "")),
         "prestart_confirm",
-        actor_role=actor_role,
-        actor_id=actor,
+        actor_role=effective_role,
+        actor_id=effective_actor,
         reason=reason,
         context={
             "prestart_passed": passed,
@@ -896,7 +964,7 @@ def confirm_prestart(
     stamp = _stamp(now)
     correlation = audit.new_correlation_id()
     before = _snapshot(permit)
-    checked_by = str(actor or "").strip()
+    checked_by = effective_actor
     with connection:
         for row in rows:
             connection.execute(
@@ -944,9 +1012,10 @@ def complete_work(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     handback_note: str,
     actor_role: str = roles.ROLE_ACTION_OWNER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """作业完成并交还现场：active → closeout_review."""
@@ -957,6 +1026,7 @@ def complete_work(
         actor=actor,
         actor_role=actor_role,
         reason=handback_note,
+        user=user,
         now=now,
     )
 
@@ -965,9 +1035,10 @@ def suspend_permit(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     reason: str,
     actor_role: str = roles.ROLE_ACTION_OWNER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """暂停执行：active → suspended."""
@@ -978,6 +1049,7 @@ def suspend_permit(
         actor=actor,
         actor_role=actor_role,
         reason=reason,
+        user=user,
         now=now,
     )
 
@@ -986,8 +1058,9 @@ def resume_permit(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     actor_role: str = roles.ROLE_ACTION_OWNER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """恢复执行：suspended → active."""
@@ -997,6 +1070,7 @@ def resume_permit(
         "resume",
         actor=actor,
         actor_role=actor_role,
+        user=user,
         now=now,
     )
 
@@ -1005,9 +1079,10 @@ def close_permit(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     note: str = "",
     actor_role: str = roles.ROLE_EHS_REVIEWER,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """关闭作业许可：closeout_review → closed；不允许有未关闭隐患。"""
@@ -1018,6 +1093,7 @@ def close_permit(
         actor=actor,
         actor_role=actor_role,
         reason=note,
+        user=user,
         now=now,
     )
 
@@ -1026,9 +1102,10 @@ def cancel_permit(
     connection: sqlite3.Connection,
     permit_id: str,
     *,
-    actor: str,
+    actor: str = "",
     reason: str,
     actor_role: str = roles.ROLE_APPLICANT,
+    user: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """取消未激活的作业许可（终态）。"""
@@ -1039,6 +1116,7 @@ def cancel_permit(
         actor=actor,
         actor_role=actor_role,
         reason=reason,
+        user=user,
         now=now,
     )
 
@@ -1058,6 +1136,159 @@ def expire_permit(
         "expire",
         actor=actor,
         actor_role=actor_role,
+        now=now,
+    )
+
+
+def _apply_assignment(
+    connection: sqlite3.Connection,
+    permit: Mapping[str, Any],
+    field: str,
+    value: str,
+    action: str,
+    *,
+    actor: str,
+    reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if str(permit.get(field, "") or "").strip() == value:
+        return get_permit(connection, str(permit["id"]))
+    before = _snapshot(permit)
+    stamp = _stamp(now)
+    correlation = audit.new_correlation_id()
+    with connection:
+        connection.execute(
+            f"UPDATE permits SET {field} = ?, updated_at = ?, "
+            "version = version + 1 WHERE id = ?",
+            (value, stamp, str(permit["id"])),
+        )
+        after = {**before, field: value, "updated_at": stamp}
+        audit.record_event(
+            connection,
+            audit.build_event(
+                entity_type=audit.ENTITY_PERMIT,
+                entity_id=str(permit["id"]),
+                action=f"permit.{action}",
+                actor=actor,
+                from_state=str(permit.get("status", "")),
+                to_state=str(permit.get("status", "")),
+                reason=reason,
+                before=before,
+                after=after,
+                correlation_id=correlation,
+                now=now,
+            ),
+        )
+    return get_permit(connection, str(permit["id"]))
+
+
+def _assignment_target(
+    connection: sqlite3.Connection, target_id: str, permission: str
+) -> dict[str, Any]:
+    return persona_service.require_role_user(connection, target_id, permission)
+
+
+def assign_permit_owner(
+    connection: sqlite3.Connection,
+    permit_id: str,
+    *,
+    owner_id: str,
+    actor: str = "",
+    user: Mapping[str, Any] | None = None,
+    reason: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Assign the permit owner to an active demo user."""
+    permit = get_permit(connection, permit_id)
+    if permit is None:
+        raise KeyError(f"未找到作业许可：{permit_id}")
+    if str(permit.get("status", "")) in permit_state.PERMIT_TERMINAL_STATUSES:
+        raise ValueError("已终结的作业许可不能变更负责人。")
+    if user is not None:
+        permissions.assert_can(user, permissions.PERMIT_EDIT, entity=permit)
+    target = _assignment_target(
+        connection, owner_id, permissions.PERMIT_PRESTART_CONFIRM
+    )
+    effective_actor = permissions.user_id(user) or str(actor or "").strip()
+    return _apply_assignment(
+        connection,
+        permit,
+        "owner_id",
+        str(target["id"]),
+        "assign_owner",
+        actor=effective_actor,
+        reason=str(reason or "").strip()
+        or f"指派作业负责人为 {target['display_name']}",
+        now=now,
+    )
+
+
+def assign_permit_ehs_reviewer(
+    connection: sqlite3.Connection,
+    permit_id: str,
+    *,
+    reviewer_id: str,
+    actor: str = "",
+    user: Mapping[str, Any] | None = None,
+    reason: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Assign the EHS reviewer of one permit to an active demo user."""
+    permit = get_permit(connection, permit_id)
+    if permit is None:
+        raise KeyError(f"未找到作业许可：{permit_id}")
+    if str(permit.get("status", "")) in permit_state.PERMIT_TERMINAL_STATUSES:
+        raise ValueError("已终结的作业许可不能变更 EHS 审核人。")
+    if user is not None:
+        permissions.assert_can(user, permissions.PERMIT_EDIT, entity=permit)
+    target = _assignment_target(
+        connection, reviewer_id, permissions.PERMIT_EHS_REVIEW
+    )
+    effective_actor = permissions.user_id(user) or str(actor or "").strip()
+    return _apply_assignment(
+        connection,
+        permit,
+        "ehs_reviewer_id",
+        str(target["id"]),
+        "assign_ehs_reviewer",
+        actor=effective_actor,
+        reason=str(reason or "").strip()
+        or f"指派 EHS 审核人为 {target['display_name']}",
+        now=now,
+    )
+
+
+def assign_permit_approver(
+    connection: sqlite3.Connection,
+    permit_id: str,
+    *,
+    approver_id: str,
+    actor: str = "",
+    user: Mapping[str, Any] | None = None,
+    reason: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Assign the designated approver of one permit to an active demo user."""
+    permit = get_permit(connection, permit_id)
+    if permit is None:
+        raise KeyError(f"未找到作业许可：{permit_id}")
+    if str(permit.get("status", "")) in permit_state.PERMIT_TERMINAL_STATUSES:
+        raise ValueError("已终结的作业许可不能变更批准人。")
+    if user is not None:
+        permissions.assert_can(user, permissions.PERMIT_EDIT, entity=permit)
+    target = _assignment_target(
+        connection, approver_id, permissions.PERMIT_APPROVE
+    )
+    effective_actor = permissions.user_id(user) or str(actor or "").strip()
+    return _apply_assignment(
+        connection,
+        permit,
+        "designated_approver_id",
+        str(target["id"]),
+        "assign_approver",
+        actor=effective_actor,
+        reason=str(reason or "").strip()
+        or f"指派批准人为 {target['display_name']}",
         now=now,
     )
 
@@ -1105,6 +1336,7 @@ def import_legacy_job(
         jsa_items=mapped.get("jsa_items", ()),
         actor=actor,
         audit_action="permit.imported",
+        allow_non_draft=True,
         created_at=str(mapped.get("created_at", "")),
         updated_at=str(mapped.get("updated_at", "")),
         now=now,
@@ -1114,6 +1346,9 @@ def import_legacy_job(
 __all__ = [
     "DEFAULT_PERMIT_TYPE",
     "add_evidence",
+    "assign_permit_approver",
+    "assign_permit_ehs_reviewer",
+    "assign_permit_owner",
     "cancel_permit",
     "close_permit",
     "complete_ehs_review",
