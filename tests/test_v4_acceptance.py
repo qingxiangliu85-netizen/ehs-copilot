@@ -17,6 +17,10 @@ so the same regression cannot silently come back:
 The dashboard tests drive the *business* layer across a full HF transition and
 assert that every metric moves with the real state change, instead of merely
 checking that the page renders.
+
+P0C moved the product navigation to ``app.py`` and preserved the V4 multi-page
+console as ``legacy_console.py``; these V4 regressions therefore drive
+``legacy_console.py``.
 """
 
 from __future__ import annotations
@@ -76,13 +80,13 @@ def _load_hf(app: AppTest) -> AppTest:
 
 
 def _app_helpers():
-    """Import the pure page helpers from ``app.py`` lazily.
+    """Import the pure page helpers from ``legacy_console.py`` lazily.
 
-    ``app.py`` executes the whole Streamlit page when imported, so importing it
+    ``legacy_console.py`` executes the whole Streamlit page when imported, so importing it
     at test-module level would print Streamlit's "run with streamlit run"
     warning and execute a page render during collection.
     """
-    from app import legacy_close_guard, safe_index, safe_iso_date
+    from legacy_console import legacy_close_guard, safe_index, safe_iso_date
 
     return legacy_close_guard, safe_index, safe_iso_date
 
@@ -99,7 +103,7 @@ class NavigationStateTests(unittest.TestCase):
         for entry, expected_title in TOOLBOX_TARGETS.items():
             with self.subTest(entry=entry):
                 app = AppTest.from_file(
-                    PROJECT_ROOT / "app.py", default_timeout=300
+                    PROJECT_ROOT / "legacy_console.py", default_timeout=300
                 ).run()
                 app.radio[0].set_value("工具箱").run(timeout=300)
                 self.assertEqual([e.value for e in app.error], [])
@@ -118,7 +122,7 @@ class NavigationStateTests(unittest.TestCase):
                 self.assertIn(expected_title, [item.value for item in app.title])
 
     def test_nav_round_trip_does_not_leak_state(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         for _ in range(2):
             app.radio[0].set_value("工具箱").run(timeout=300)
             _button(app, "进入SDS资料库").click().run(timeout=300)
@@ -128,7 +132,7 @@ class NavigationStateTests(unittest.TestCase):
         self.assertEqual(len(app.job_records) if hasattr(app, "job_records") else 0, 0)
 
     def test_sidebar_radio_still_offers_all_seven_pages(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         self.assertEqual(
             list(app.radio[0].options),
             [
@@ -150,7 +154,7 @@ class NavigationStateTests(unittest.TestCase):
 
 class HomePageTests(unittest.TestCase):
     def test_job_list_renders_column_captions(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         app.session_state[ACTIVE_JOB_KEY] = None
         app.run(timeout=300)
@@ -159,7 +163,7 @@ class HomePageTests(unittest.TestCase):
             self.assertIn(f"**{header}**", markdown)
 
     def test_repeated_demo_load_does_not_duplicate_jobs(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         for _ in range(3):
             app.session_state[ACTIVE_JOB_KEY] = None
             app.run(timeout=300)
@@ -174,7 +178,7 @@ class HomePageTests(unittest.TestCase):
         self.assertEqual(len({h["隐患编号"] for h in linked}), 3)
 
     def test_empty_filter_message_mentions_the_filter(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         app.session_state[ACTIVE_JOB_KEY] = None
         app.run(timeout=300)
@@ -184,7 +188,7 @@ class HomePageTests(unittest.TestCase):
         self.assertIn("筛选", info)
 
     def test_no_jobs_at_all_keeps_the_load_hint(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         info = "\n".join(item.value for item in app.info)
         self.assertIn("一键载入HF酸洗模拟案例", info)
 
@@ -243,7 +247,7 @@ class HazardCloseGateTests(unittest.TestCase):
         self.assertEqual(_iso_date("", date(2026, 1, 1)), date(2026, 1, 1))
 
     def test_detail_page_survives_a_broken_hazard_due_date(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         # Simulate a corrupted / missing due date on a linked hazard.
         for hazard in app.session_state["hazard_records"]:
@@ -255,7 +259,7 @@ class HazardCloseGateTests(unittest.TestCase):
         self.assertEqual([e.value for e in app.error], [])
 
     def test_hazard_module_page_renders_for_a_broken_record(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         app.radio[0].set_value("隐患整改").run(timeout=300)
         self.assertEqual([e.value for e in app.exception], [])
         self.assertIn("整改完成率", [item.label for item in app.metric])
@@ -265,7 +269,7 @@ class JsaDraftReuseTests(unittest.TestCase):
     """A JSA hazard draft must not be creatable twice (bug #5)."""
 
     def test_created_draft_is_no_longer_offered(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         _button(app, "生成 JSA 草稿").click().run(timeout=300)
         for field in app.text_input:
@@ -454,7 +458,7 @@ class DashboardFollowsBusinessStateTests(unittest.TestCase):
 
 class ApprovalGateTests(unittest.TestCase):
     def test_execution_is_not_reachable_before_approval(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         _button(app, "生成 JSA 草稿").click().run(timeout=300)
         for field in app.text_input:
@@ -467,7 +471,7 @@ class ApprovalGateTests(unittest.TestCase):
         self.assertIsNotNone(_button(app, "✅ 批准"))
 
     def test_rejected_job_offers_no_execution_path(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         _button(app, "生成 JSA 草稿").click().run(timeout=300)
         for field in app.text_input:
@@ -490,7 +494,7 @@ class ApprovalGateTests(unittest.TestCase):
         self.assertEqual([e.value for e in app.exception], [])
 
     def test_modify_and_approve_records_a_conditional_approval(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         _button(app, "生成 JSA 草稿").click().run(timeout=300)
         for field in app.text_input:
@@ -516,7 +520,7 @@ class ApprovalGateTests(unittest.TestCase):
         self.assertIsNotNone(_button(app, "开始执行"))
 
     def test_approval_cannot_be_submitted_twice(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _load_hf(app)
         _button(app, "生成 JSA 草稿").click().run(timeout=300)
         for field in app.text_input:

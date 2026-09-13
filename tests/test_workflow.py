@@ -387,7 +387,7 @@ class WorkflowGraphTests(unittest.TestCase):
 
 class WorkflowPageTests(unittest.TestCase):
     def test_workflow_page_renders_and_runs_an_example_task(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         self.assertEqual(len(app.exception), 0)
 
         app.radio[0].set_value("AI工作流控制台").run(timeout=300)
@@ -421,7 +421,7 @@ class WorkflowPageTests(unittest.TestCase):
 
     def test_existing_pages_are_still_available_under_v4_navigation(self) -> None:
         """P4B: 旧的 SDS / JSA / 隐患 / 工作流能力必须保留在新的七项一级导航下。"""
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         self.assertEqual(len(app.exception), 0)
         options = list(app.radio[0].options)
         self.assertEqual(

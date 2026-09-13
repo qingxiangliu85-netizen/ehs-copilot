@@ -10,8 +10,11 @@ These tests protect the product-level guarantees of P4B:
 * the HF pickling demo case being walkable from 草稿 to 已关闭;
 * technical traces collapsed by default.
 
-The Streamlit tests drive the real ``app.py`` with ``AppTest``; the helper tests
-are pure-function checks that keep the stage badges honest.
+The Streamlit tests drive the preserved V4 console entry
+(``legacy_console.py``) with ``AppTest``; the helper tests are pure-function
+checks that keep the stage badges honest.  P0C moved the product navigation to
+``app.py``, so the V4 console is kept runnable and these tests keep protecting
+it; the V5 product UI has its own suite in ``test_p0c_ui.py``.
 """
 
 from __future__ import annotations
@@ -134,7 +137,7 @@ class WorkbenchHelperTests(unittest.TestCase):
 
 class WorkbenchHomeTests(unittest.TestCase):
     def test_home_page_shows_pipeline_metrics_actions_and_job_list(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(list(app.radio[0].options), list(NAV_PAGES))
         self.assertIn("作业闭环", [item.value for item in app.title])
@@ -153,7 +156,7 @@ class WorkbenchHomeTests(unittest.TestCase):
         ))
 
     def test_new_job_action_reveals_the_creation_form(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _buttons(app, "新建危化品作业").click().run(timeout=300)
         self.assertEqual(len(app.exception), 0)
         labels = [item.label for item in app.text_input]
@@ -163,7 +166,7 @@ class WorkbenchHomeTests(unittest.TestCase):
 
 class JobDetailStageTests(unittest.TestCase):
     def setUp(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _buttons(app, "一键载入HF酸洗模拟案例").click().run(timeout=300)
         self.app = app
 
@@ -251,7 +254,7 @@ class HfCaseEndToEndTests(unittest.TestCase):
     """The HF demo case must be walkable from 草稿 to 已关闭 through the UI."""
 
     def test_hf_case_can_be_walked_to_job_closure(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         _buttons(app, "一键载入HF酸洗模拟案例").click().run(timeout=300)
 
         # 3 → EHS 确认
@@ -340,7 +343,7 @@ class HfCaseEndToEndTests(unittest.TestCase):
 
 class ToolboxTests(unittest.TestCase):
     def test_toolbox_links_to_the_three_preserved_tools(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=300).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=300).run()
         app.radio[0].set_value("工具箱").run(timeout=300)
         self.assertEqual(len(app.exception), 0)
         self.assertIn("工具箱", [item.value for item in app.title])

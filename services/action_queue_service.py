@@ -82,6 +82,17 @@ def _permit_candidates(permit: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "permission": permissions.PERMIT_PRESTART_CONFIRM,
             }
         )
+    elif status == permit_state.PERMIT_SUSPENDED:
+        items.append(
+            {
+                **base,
+                "action_type": action_queue.ACTION_RESUME,
+                "reason": "作业已暂停：确认现场条件后恢复作业",
+                "assigned_to": owner,
+                "due_at": "",
+                "permission": permissions.PERMIT_RESUME,
+            }
+        )
     elif status == permit_state.PERMIT_CLOSEOUT_REVIEW:
         items.append(
             {

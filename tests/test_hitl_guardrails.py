@@ -661,7 +661,7 @@ class TimelineTests(unittest.TestCase):
 
 class WorkflowPageApprovalTests(unittest.TestCase):
     def test_the_page_pauses_for_approval_and_continues_after_approving(self) -> None:
-        app = AppTest.from_file(PROJECT_ROOT / "app.py", default_timeout=600).run()
+        app = AppTest.from_file(PROJECT_ROOT / "legacy_console.py", default_timeout=600).run()
         self.assertEqual(len(app.exception), 0)
 
         app.radio[0].set_value("AI工作流控制台").run(timeout=600)

@@ -336,6 +336,7 @@ def _permit_context(
         and all(str(row.get("result", "")) == "pass" for row in required),
         "open_hazard_count": int(permit.get("open_hazard_count", 0) or 0),
         "valid_to": str(permit.get("valid_to", "") or ""),
+        "handback_note": str(permit.get("handback_note", "") or ""),
     }
 
 

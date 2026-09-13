@@ -256,11 +256,29 @@ def _expire_precondition(context: Mapping[str, Any], *, now: datetime | None) ->
     return ""
 
 
+def _resume_precondition(context: Mapping[str, Any], *, now: datetime | None) -> str:
+    """A paused permit may only resume while its validity window is still open.
+
+    Unlike ``prestart_confirm`` this is deliberately lenient when ``valid_to`` is
+    absent: a record without a stored window is not treated as expired.  When a
+    window exists and has passed, resuming is refused so no work restarts under a
+    lapsed permit.
+    """
+    valid_to = _as_datetime(context.get("valid_to", ""))
+    if valid_to is None:
+        return ""
+    moment = now or datetime.now()
+    if moment > valid_to:
+        return "作业许可已超过有效期，不能恢复作业；请先重新审批或延期。"
+    return ""
+
+
 _PRECONDITIONS: dict[str, Callable[..., str]] = {
     "submit": _submit_precondition,
     "confirm": _confirm_precondition,
     "approve": _approve_precondition,
     "prestart_confirm": _prestart_precondition,
+    "resume": _resume_precondition,
     "close": _close_precondition,
     "expire": _expire_precondition,
 }
