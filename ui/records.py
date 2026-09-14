@@ -73,6 +73,19 @@ def sds_state() -> str:
     return str(st.session_state.get(common.SDS_STATE_KEY, STATE_NOT_LOADED))
 
 
+def current_sds_knowledge_base() -> Any:
+    """Return the current session SDS knowledge base without changing state."""
+    return st.session_state.get(KB_KEY)
+
+
+def load_demo_sds_for_workflow() -> Any:
+    """Load the Synthetic SDS for another business page in this same session."""
+    knowledge_base = _build_from_paths((str(DEMO_SDS_PATH),))
+    st.session_state[KB_KEY] = knowledge_base
+    _set_state(STATE_LOADED)
+    return knowledge_base
+
+
 def _set_state(state: str, error: str = "") -> None:
     st.session_state[common.SDS_STATE_KEY] = state
     st.session_state[common.SDS_ERROR_KEY] = error
@@ -280,5 +293,7 @@ __all__ = [
     "STATE_LOADING",
     "STATE_NOT_LOADED",
     "render",
+    "current_sds_knowledge_base",
+    "load_demo_sds_for_workflow",
     "sds_state",
 ]

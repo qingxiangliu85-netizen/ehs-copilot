@@ -13,7 +13,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 DDL_STATEMENTS: tuple[str, ...] = (
     """
@@ -202,6 +202,42 @@ DDL_STATEMENTS: tuple[str, ...] = (
         created_at TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS work_drafts (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        work_type TEXT NOT NULL DEFAULT '其他高风险作业',
+        description TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL DEFAULT '',
+        planned_start TEXT NOT NULL DEFAULT '',
+        planned_end TEXT NOT NULL DEFAULT '',
+        people_count INTEGER NOT NULL DEFAULT 0,
+        responsible_person TEXT NOT NULL DEFAULT '',
+        contractor_involved INTEGER NOT NULL DEFAULT 0,
+        work_steps_json TEXT NOT NULL DEFAULT '[]',
+        chemicals_json TEXT NOT NULL DEFAULT '[]',
+        user_risk_tags_json TEXT NOT NULL DEFAULT '[]',
+        ai_risk_tags_json TEXT NOT NULL DEFAULT '[]',
+        confirmed_risk_tags_json TEXT NOT NULL DEFAULT '[]',
+        documents_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'draft',
+        created_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS safety_review_packs (
+        pack_id TEXT NOT NULL,
+        draft_id TEXT NOT NULL REFERENCES work_drafts(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        confirmed_by TEXT NOT NULL DEFAULT '',
+        confirmed_at TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (pack_id, version)
+    );
+    """,
     "CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_events (entity_type, entity_id, created_at);",
     "CREATE INDEX IF NOT EXISTS idx_audit_correlation ON audit_events (correlation_id);",
     "CREATE INDEX IF NOT EXISTS idx_permits_status ON permits (status);",
@@ -209,6 +245,8 @@ DDL_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_permits_approver ON permits (designated_approver_id);",
     "CREATE INDEX IF NOT EXISTS idx_hazards_permit ON hazards (permit_id, status);",
     "CREATE INDEX IF NOT EXISTS idx_hazards_owner ON hazards (owner_id, status);",
+    "CREATE INDEX IF NOT EXISTS idx_work_drafts_status ON work_drafts (status, updated_at);",
+    "CREATE INDEX IF NOT EXISTS idx_review_packs_draft ON safety_review_packs (draft_id, version);",
 )
 
 EXPECTED_TABLES: tuple[str, ...] = (
@@ -224,6 +262,8 @@ EXPECTED_TABLES: tuple[str, ...] = (
     "corrective_actions",
     "hazard_evidence",
     "audit_events",
+    "work_drafts",
+    "safety_review_packs",
 )
 
 

@@ -1,0 +1,10 @@
+{"id":"SR-001","name":"动火作业类型识别","input":{"title":"管线焊接维修","description":"使用电焊进行管线修复","work_steps":["焊接管线"]},"expected":{"work_type":"动火作业","risk_tags":["火灾爆炸","触电"]}}
+{"id":"SR-002","name":"受限空间与化学品复合风险","input":{"title":"罐内清洗","description":"人员进入罐内使用盐酸清洗","work_steps":["进入罐内清洗"],"chemicals":["盐酸"]},"expected":{"work_type":"受限空间","risk_tags":["化学品暴露","腐蚀/灼伤","中毒窒息","受限空间"]}}
+{"id":"SR-003","name":"HF作业匹配正确SDS","input":{"chemicals":["氢氟酸"]},"evidence":{"evidence_id":"EV-HF","source_type":"sds","source_name":"HF_Synthetic_SDS.pdf","version":"v1","page":2,"snippet":"Hydrogen fluoride HF synthetic demo evidence","chunk_id":"1","locator":""},"expected":{"sds_match":true}}
+{"id":"SR-004","name":"涉及化学品但无SDS","input":{"chemicals":["氢氟酸"]},"expected":{"sds_match":false,"blocked":true}}
+{"id":"SR-005","name":"化学品与SDS不匹配","input":{"chemicals":["氢氟酸"]},"evidence":{"evidence_id":"EV-ACETONE","source_type":"sds","source_name":"Acetone_SDS.pdf","version":"v1","page":2,"snippet":"Acetone synthetic demo evidence","chunk_id":"1","locator":""},"expected":{"sds_match":false,"blocked":true}}
+{"id":"SR-006","name":"缺少地点时间负责人","input":{"title":"设备检修","description":"停机检修","work_steps":["拆卸设备"],"people_count":2},"expected":{"missing":["作业地点","计划开始时间","计划结束时间","负责人"]}}
+{"id":"SR-007","name":"同一化学品存在两个未确认SDS版本","resources":[{"document_id":"SDS-1","source_type":"sds","chemical_name":"HF","file_name":"HF_SDS_v1.pdf","version":"v1"},{"document_id":"SDS-2","source_type":"sds","chemical_name":"HF","file_name":"HF_SDS_v2.pdf","version":"v2"}],"expected":{"conflict":true}}
+{"id":"SR-008","name":"JSA草稿不含AI风险赋值","input":{"work_step":"拆卸管线","hazard":"腐蚀/灼伤"},"expected":{"likelihood":null,"severity":null}}
+{"id":"SR-009","name":"未经EHS确认不能confirmed","expected":{"applicant_confirm":false}}
+{"id":"SR-010","name":"完整证据和人工赋值后确认且Permit数量不变","expected":{"status":"confirmed","permit_delta":0}}

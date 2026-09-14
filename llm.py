@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any, Mapping
+
 from config import (
     LLM_TIMEOUT_SECONDS,
     NOT_FOUND_MESSAGE,
@@ -82,3 +85,47 @@ def generate_response(prompt: str) -> str:
     if not content or not content.strip():
         raise LLMResponseError("LLM 返回了空内容，请稍后重试。")
     return content.strip()
+
+
+def generate_structured_response(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+) -> dict[str, Any]:
+    """Return one constrained JSON object through the configured chat API.
+
+    Phase 1 validates the returned fields again in its domain layer.  This
+    helper intentionally does not know about Safety Review Packs and leaves the
+    existing SDS-specific interface unchanged.
+    """
+    from openai import OpenAI
+
+    if not is_llm_configured():
+        raise LLMConfigurationError("未配置LLM，使用规则与语义检索模式。")
+
+    client_kwargs: dict[str, object] = {
+        "api_key": OPENAI_API_KEY,
+        "timeout": LLM_TIMEOUT_SECONDS,
+    }
+    if OPENAI_BASE_URL:
+        client_kwargs["base_url"] = OPENAI_BASE_URL
+    client = OpenAI(**client_kwargs)
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": str(system_prompt)},
+            {"role": "user", "content": str(user_prompt)},
+        ],
+    )
+    content = response.choices[0].message.content
+    if not content or not content.strip():
+        raise LLMResponseError("LLM返回了空的结构化响应。")
+    try:
+        parsed = json.loads(content)
+    except (TypeError, ValueError) as exc:
+        raise LLMResponseError("LLM未返回有效JSON对象。") from exc
+    if not isinstance(parsed, Mapping):
+        raise LLMResponseError("LLM结构化响应必须是JSON对象。")
+    return dict(parsed)

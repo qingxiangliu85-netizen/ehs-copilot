@@ -67,6 +67,7 @@ OP_RISK_DOWNGRADE = "risk_downgrade"
 OP_SDS_INSUFFICIENT = "sds_insufficient_evidence"
 OP_SDS_CONFLICT = "sds_source_conflict"
 OP_APPROVE_JOB = "approve_job"
+OP_CONFIRM_SAFETY_REVIEW_PACK = "confirm_safety_review_pack"
 
 OPERATION_LABELS: dict[str, str] = {
     OP_CREATE_HAZARD: "创建隐患",
@@ -77,12 +78,14 @@ OPERATION_LABELS: dict[str, str] = {
     OP_SDS_INSUFFICIENT: "SDS 证据不足后继续",
     OP_SDS_CONFLICT: "SDS 来源冲突后继续",
     OP_APPROVE_JOB: "批准作业单",
+    OP_CONFIRM_SAFETY_REVIEW_PACK: "确认作业安全审核包",
 }
 
 # When one plan carries several risky calls, the aggregated request is labelled
 # by the most severe operation it contains.
 OPERATION_PRIORITY: tuple[str, ...] = (
     OP_MAJOR_RISK_WRITE,
+    OP_CONFIRM_SAFETY_REVIEW_PACK,
     OP_RISK_DOWNGRADE,
     OP_CLOSE_HAZARD,
     OP_CREATE_HAZARD,
@@ -305,6 +308,7 @@ __all__ = [
     "OPERATION_LABELS",
     "OPERATION_PRIORITY",
     "OP_APPROVE_JOB",
+    "OP_CONFIRM_SAFETY_REVIEW_PACK",
     "OP_CLOSE_HAZARD",
     "OP_CREATE_HAZARD",
     "OP_MAJOR_RISK_WRITE",

@@ -8,6 +8,7 @@ Direct runtime dependencies and the licenses declared by the installed distribut
 |---|---:|---|
 | Streamlit | 1.62.0 | Apache-2.0 |
 | LangChain | 1.3.18 | MIT |
+| LangGraph | 1.x | MIT |
 | langchain-community | 0.4.2 | MIT |
 | langchain-text-splitters | 1.1.2 | MIT |
 | langchain-huggingface | 1.2.2 | MIT |

@@ -17,7 +17,7 @@ from services import permit_service, persona_service
 from workflow import audit, permit_state, permissions, roles, sla
 from workflow import actions as workflow_actions
 
-from . import commands, common, product, widgets, worklist
+from . import commands, common, product, safety_review as safety_review_ui, widgets, worklist
 
 PENDING_KEY = "_permit_pending"
 CREATE_KEY = "_permit_create_open"
@@ -293,28 +293,36 @@ def render_list(connection: sqlite3.Connection, user: Mapping[str, Any]) -> None
         "（Demo 覆盖危化品 / 动火 / 受限空间 / 电气隔离 / 高处 / 开挖）"
     )
 
+    can_create = permissions.can(user, permissions.PERMIT_CREATE)
+    toolbar = st.columns([1.2, 3.8])
+    if can_create and toolbar[0].button(
+        "新建高风险作业", type="primary", width="stretch"
+    ):
+        st.session_state[CREATE_KEY] = not bool(st.session_state.get(CREATE_KEY))
+        if st.session_state[CREATE_KEY]:
+            safety_review_ui.close_workspace()
+    if can_create:
+        toolbar[1].caption(
+            f"当前身份 {common.persona_label(user)} 可先生成并确认Safety Review Pack；Phase 1不创建正式Permit。"
+            if can_create
+            else ""
+        )
+
+    active_draft = bool(st.session_state.get(safety_review_ui.ACTIVE_DRAFT_KEY))
+    if (can_create and st.session_state.get(CREATE_KEY)) or active_draft:
+        safety_review_ui.render_workspace(connection, user)
+        return
+
+    safety_review_ui.render_draft_list(connection, user)
+    st.divider()
+
     permits = [
         permit_service.get_permit(connection, str(row["id"]))
         for row in permit_service.list_permits(connection, limit=500)
     ]
     permits = [permit for permit in permits if permit is not None]
-
-    can_create = permissions.can(user, permissions.PERMIT_CREATE)
-    toolbar = st.columns([1.2, 3.8])
-    if can_create and toolbar[0].button(
-        "新建作业许可", type="primary", width="stretch"
-    ):
-        st.session_state[CREATE_KEY] = not bool(st.session_state.get(CREATE_KEY))
-    if can_create:
-        toolbar[1].caption(
-            f"当前身份 {common.persona_label(user)} 具有新建权限。"
-            if can_create
-            else ""
-        )
-
-    if can_create and st.session_state.get(CREATE_KEY):
-        _render_create_form(connection, user)
-        st.divider()
+    st.markdown("#### 正式作业许可")
+    st.caption("以下为既有Permit后半链路；Phase 1确认审核包后不会自动新增这里的记录。")
 
     if not permits:
         widgets.empty_state("暂无作业许可记录。")

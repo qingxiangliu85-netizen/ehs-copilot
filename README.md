@@ -2,7 +2,7 @@
 
 ## AI辅助EHS风险与危化品管理平台
 
-面向制造业EHS场景的轻量数字化原型，集成SDS语义检索、JSA风险评估、隐患整改闭环、EHS驾驶舱，以及V3的AI工作流编排层；V4 增加「危化品非例行作业单」主线——把证据、JSA、审批、执行、整改与复查串成同一条作业闭环。
+面向制造业EHS场景的轻量数字化原型，集成SDS语义检索、JSA风险评估、隐患整改闭环、EHS驾驶舱与作业许可工作流。Phase 1 在正式Permit前增加「高风险作业安全准备」：用户提交真实作业和资料后，系统生成带Citation、缺失项、冲突项和阻断规则的Safety Review Pack，由EHS人工确认后结束。
 
 > **本项目是面向真实 EHS 业务流程设计的 AI 工作流原型，不是已在真实企业生产环境部署的系统。**
 >
@@ -13,6 +13,40 @@
 **Live Demo：** <https://ehs-copilot-zgiwyfrlcygmh58qcjp6lb.streamlit.app/>
 
 公开Demo无需API Key。首次打开时会自动加载仓库内置的中英双语Synthetic SDS；访客也可以上传自己的多份可复制文本PDF。
+
+## Phase 1：高风险作业安全准备
+
+作业许可页的主入口为 **新建高风险作业**，流程固定为：
+
+```text
+填写作业 → AI信息预检 → 准备SDS/SOP/内部资料 → 生成并审核Safety Review Pack
+```
+
+- 固定大类＋自由描述＋AI建议，最终作业类型和风险标签由用户确认；
+- SDS与SOP/内部资料使用独立会话级向量库，避免来源串轨；
+- 文件只在当前会话解析，SQLite不保存二进制或本地绝对路径；
+- 审核包按版本保存，包含作业摘要、风险、Citation、JSA草稿、控制措施、PPE、应急要求、缺失项、冲突项和待确认项；
+- AI不得填写JSA的L/S或残余L/S，人工填写后统一调用 `jsa.calculate_risk`；
+- 涉及化学品但无匹配SDS、Citation不完整、关键控制缺乏依据或冲突未处理时，审核包不能确认；
+- 有API Key时使用受约束JSON输出，无Key时使用规则识别＋语义检索＋结构化模板，证据不足时只显示缺失项与阻断原因；
+- Phase 1到「审核包已确认」为止，**不会创建正式Permit**。后续许可审批、执行、整改和关闭仍复用既有链路。
+
+Phase 1使用专用固定工作流：
+
+```text
+precheck_work → retrieve_evidence → draft_review_pack
+→ validate_review_pack → human_review
+```
+
+它是后台审核包生成引擎，不作为用户可见的“Agent功能”。旧自然语言工作流仍保留用于回归，但不承担结构化新建作业流程。
+
+### Phase 1离线评测
+
+`evals/safety_review_dataset.jsonl`包含10个确定性场景，覆盖作业类型、复合风险、SDS正反匹配、必填项、版本冲突、JSA结构、人工确认及“确认前不创建Permit”。运行：
+
+```powershell
+python evals/evaluate_safety_review.py
+```
 
 ## V3 要解决的业务问题
 
