@@ -132,7 +132,7 @@ def _render_intake(
         second = st.columns([1.8, 1.2, 1.2, 1.3])
         location = second[0].text_input("地点", value=str(_default("location", draft) or ""))
         people_count = second[1].number_input(
-            "人数", min_value=1, max_value=100, value=int(_default("people_count", draft) or 1)
+            "作业人数", min_value=1, max_value=100, value=int(_default("people_count", draft) or 1)
         )
         responsible = second[2].text_input(
             "负责人", value=str(_default("responsible_person", draft) or "")
@@ -265,13 +265,28 @@ def _upload_resources(uploaded: Any, source_type: str, version: str) -> list[dic
     return resources
 
 
+def _builtin_resource_options() -> dict[str, dict[str, Any]]:
+    entries = {}
+    for entry in evidence_adapter.demo_document_registry():
+        label = (
+            f"{entry.get('title') or entry.get('file_name')}"
+            f"（{entry.get('source_nature') or entry.get('source_type')}）"
+        )
+        entries[label] = entry
+    return entries
+
+
 def _render_documents(
     connection: sqlite3.Connection,
     user: Mapping[str, Any],
     draft: Mapping[str, Any],
 ) -> None:
     st.markdown("#### 3. 准备资料")
-    st.caption("文件只在当前会话解析；SQLite仅保存名称、版本、哈希等元数据和最终Citation快照。")
+    st.caption(
+        "SDS 与企业SOP都支持“选择内置资料”或“上传自己的文件”。文件只在当前会话解析；"
+        "SQLite仅保存名称、版本、哈希等元数据和最终Citation快照。"
+    )
+    builtin_options = _builtin_resource_options()
     use_demo = st.checkbox(
         "选择当前会话的Synthetic SDS知识库",
         value=records.current_sds_knowledge_base() is not None,
@@ -279,11 +294,27 @@ def _render_documents(
     )
     if use_demo and records.current_sds_knowledge_base() is None:
         st.warning("当前Synthetic SDS尚未加载；保存资料时将自动加载。")
+    builtin_ids: list[str] = []
+    if builtin_options:
+        st.markdown("**内置资料库**")
+        st.caption(
+            "标注“真实公开 SDS”的是厂商/供应商官网获取的原始文件；"
+            "标注“Synthetic Demo SOP”的是本仓库整理的模拟企业内部制度，"
+            "不代表任何真实企业。"
+        )
+        selected_labels = st.multiselect(
+            "选择内置SDS与企业SOP",
+            list(builtin_options),
+            help="SDS用于化学品证据；SOP用于作业流程与能量隔离证据。",
+        )
+        builtin_ids = [
+            str(builtin_options[label]["document_id"]) for label in selected_labels
+        ]
     with st.form(f"safety_documents_{draft['id']}"):
         version = st.text_input("本次上传资料版本", value="v1")
-        sds_files = st.file_uploader("上传新SDS（PDF）", type=["pdf"], accept_multiple_files=True)
+        sds_files = st.file_uploader("上传自己的SDS（PDF）", type=["pdf"], accept_multiple_files=True)
         sop_files = st.file_uploader(
-            "上传企业SOP/作业指导书（PDF/TXT/MD）",
+            "上传自己的企业SOP/作业指导书（PDF/TXT/MD）",
             type=["pdf", "txt", "md"],
             accept_multiple_files=True,
         )
@@ -297,11 +328,29 @@ def _render_documents(
         _set_step(2)
         st.rerun()
     if not submitted:
+        resources = evidence_adapter.load_demo_resources(builtin_ids)
+        if resources:
+            st.markdown("**已选择资料**")
+            st.dataframe(
+                [
+                    {
+                        "资料": item.get("file_name"),
+                        "来源性质": item.get("source_nature") or item.get("source_type"),
+                        "类型": item.get("source_type"),
+                        "版本": item.get("version"),
+                        "来源": item.get("source_url") or item.get("issuer") or "—",
+                    }
+                    for item in resources
+                ],
+                hide_index=True,
+                width="stretch",
+            )
         existing = draft.get("documents") or ()
         if existing:
             st.dataframe(existing, hide_index=True, width="stretch")
         return
-    resources = (
+    resources = evidence_adapter.load_demo_resources(builtin_ids)
+    resources += (
         _upload_resources(sds_files, "sds", version)
         + _upload_resources(sop_files, "sop", version)
         + _upload_resources(internal_files, "internal", version)
@@ -383,6 +432,26 @@ def _render_pack_sections(pack: Mapping[str, Any]) -> None:
             page = f"第{item.get('page')}页" if item.get("page") else item.get("locator", "")
             st.markdown(f"**{item.get('evidence_id')} · {source} · {page}**")
             st.caption(item.get("snippet") or "")
+    with st.expander("资料冲突（Conflicts）", expanded=bool(pack.get("conflicts"))):
+        conflicts = pack.get("conflicts") or ()
+        if not conflicts:
+            st.caption(
+                pack.get("conflict_note") or "No unresolved evidence conflict detected."
+            )
+        for conflict in conflicts:
+            if not isinstance(conflict, Mapping):
+                continue
+            state_label = (
+                "已解决" if conflict.get("resolved") else "未解决（需人工处理）"
+            )
+            refs = "、".join(conflict.get("evidence_refs") or ())
+            st.markdown(
+                f"- **{conflict.get('conflict_id') or '—'}** · {conflict.get('description') or conflict.get('text', '')}"
+                f"  \n`{state_label}` 证据：`{refs or '待补证据'}`"
+            )
+            selected = conflict.get("selected_version")
+            if conflict.get("resolved") and selected:
+                st.caption(f"人工处理：选择版本 {selected}；说明：{conflict.get('resolution_note') or '—'}")
 
 
 def _review_jsa_and_save(
@@ -412,13 +481,19 @@ def _review_jsa_and_save(
             hazard = columns[1].text_input("危害", value=str(item.get("hazard", "")), key=f"haz_{draft['id']}_{index}")
             consequence = st.text_input("可能后果", value=str(item.get("consequence", "")), key=f"cons_{draft['id']}_{index}")
             controls = st.text_area("建议控制措施", value=str(item.get("proposed_controls", "")), key=f"ctrl_{draft['id']}_{index}", height=70)
+            item_refs = st.multiselect(
+                "证据引用（高/重大风险控制措施必须绑定SDS、SOP或内部资料）",
+                evidence_ids,
+                default=[ref for ref in (item.get("evidence_refs") or ()) if ref in evidence_ids],
+                key=f"refs_{draft['id']}_{index}",
+            )
             ratings = st.columns(4)
             likelihood = ratings[0].number_input("L", 1, 5, int(item.get("likelihood") or 1), key=f"l_{draft['id']}_{index}")
             severity = ratings[1].number_input("S", 1, 5, int(item.get("severity") or 1), key=f"s_{draft['id']}_{index}")
             residual_l = ratings[2].number_input("残余L", 1, 5, int(item.get("residual_likelihood") or 1), key=f"rl_{draft['id']}_{index}")
             residual_s = ratings[3].number_input("残余S", 1, 5, int(item.get("residual_severity") or 1), key=f"rs_{draft['id']}_{index}")
             if keep:
-                base = {**item, "work_step": step, "hazard": hazard, "consequence": consequence, "proposed_controls": controls}
+                base = {**item, "work_step": step, "hazard": hazard, "consequence": consequence, "proposed_controls": controls, "evidence_refs": item_refs}
                 edited.append(
                     safety_review.apply_human_risk_rating(
                         base,
@@ -464,15 +539,24 @@ def _review_jsa_and_save(
         if pack.get("conflicts"):
             st.markdown("**资料冲突处理**")
             for conflict_index, conflict in enumerate(pack.get("conflicts") or (), start=1):
-                versions = [str(value) for value in (conflict.get("versions") or ())]
-                selected_version = st.selectbox(
-                    f"冲突{conflict_index}：选择当前适用版本",
-                    ["待处理", *versions],
-                    key=f"conflict_version_{draft['id']}_{conflict_index}",
-                )
-                conflict_resolutions.append(
-                    {"selected_version": selected_version, "index": str(conflict_index - 1)}
-                )
+                if not isinstance(conflict, Mapping):
+                    continue
+                st.markdown(f"冲突{conflict_index}：{conflict.get('description') or conflict.get('text', '')}")
+                if conflict.get("kind") == "sds_version":
+                    versions = [str(value) for value in (conflict.get("versions") or ())]
+                    selected_version = st.selectbox(
+                        f"冲突{conflict_index}：选择当前适用版本",
+                        ["待处理", *versions],
+                        key=f"conflict_version_{draft['id']}_{conflict_index}",
+                    )
+                    conflict_resolutions.append(
+                        {"selected_version": selected_version, "index": str(conflict_index - 1)}
+                    )
+                else:
+                    st.caption(
+                        "此类冲突需要更换或补充匹配的资料后重新生成审核包；"
+                        "在当前版本中无法通过人工说明解除。"
+                    )
         conflict_note = st.text_area("资料冲突处理说明（如有）", height=60)
         submitted = st.form_submit_button("保存人工审核为新版本", type="primary")
     if not submitted:
@@ -513,22 +597,29 @@ def _review_jsa_and_save(
         updated[key] = list(updated.get(key) or ()) + additions
     if updated.get("conflicts"):
         resolutions = {int(item["index"]): item["selected_version"] for item in conflict_resolutions}
-        updated["conflicts"] = [
-            {
-                **dict(item),
-                "resolved": bool(
-                    resolutions.get(index) not in {None, "待处理"}
-                    and conflict_note.strip()
-                ),
-                "selected_version": (
-                    resolutions.get(index)
-                    if resolutions.get(index) not in {None, "待处理"}
-                    else ""
-                ),
-                "resolution_note": conflict_note.strip(),
-            }
-            for index, item in enumerate(updated.get("conflicts") or ())
-        ]
+        resolved_conflicts = []
+        for index, item in enumerate(updated.get("conflicts") or ()):
+            conflict = dict(item)
+            if conflict.get("kind") == "sds_version" or "kind" not in conflict:
+                selected = resolutions.get(index)
+                resolved = bool(
+                    selected not in {None, "待处理"} and conflict_note.strip()
+                )
+                conflict.update(
+                    {
+                        "resolved": resolved,
+                        "status": "resolved" if resolved else "unresolved",
+                        "selected_version": selected if resolved else "",
+                        "resolution_note": conflict_note.strip(),
+                    }
+                )
+            else:
+                # Chemical mismatch (and similar) conflicts require corrected
+                # evidence and a regenerated pack, not an in-place manual claim.
+                conflict["resolved"] = False
+                conflict["status"] = "unresolved"
+            resolved_conflicts.append(conflict)
+        updated["conflicts"] = resolved_conflicts
     # Evidence insufficiency is recalculated from unresolved missing evidence,
     # never cleared merely because a reviewer clicked save.
     evidence_missing = [
@@ -609,9 +700,90 @@ def _render_review(
             st.rerun()
 
 
+def _render_confirmed_readonly(
+    connection: sqlite3.Connection,
+    user: Mapping[str, Any],
+    draft: Mapping[str, Any],
+) -> None:
+    """Confirmed drafts are frozen for audit; show a read-only view only."""
+    st.info("审核包已确认，该版本已冻结并用于审计追溯。")
+    st.markdown("#### 作业信息（只读）")
+    planned = "—"
+    start = str(draft.get("planned_start") or "").strip()
+    end = str(draft.get("planned_end") or "").strip()
+    if start or end:
+        planned = f"{start or '—'} ~ {end or '—'}"
+    rows = [
+        ("作业名称", str(draft.get("title") or "")),
+        ("主作业类型", str(draft.get("work_type") or "")),
+        ("自由描述", str(draft.get("description") or "")),
+        ("地点", str(draft.get("location") or "")),
+        ("计划时间", planned),
+        ("作业人数", str(draft.get("people_count") or "—")),
+        ("负责人", str(draft.get("responsible_person") or "")),
+        ("涉及承包商", "是" if draft.get("contractor_involved") else "否"),
+        ("作业步骤", "；".join(str(item) for item in (draft.get("work_steps") or ()))),
+        ("涉及化学品", "、".join(str(item) for item in (draft.get("chemicals") or ()))),
+        (
+            "确认风险标签",
+            "、".join(
+                str(item)
+                for item in (draft.get("confirmed_risk_tags") or draft.get("user_risk_tags") or ())
+            ),
+        ),
+    ]
+    for label, value in rows:
+        st.markdown(f"- **{label}**：{value if value.strip() else '—'}")
+    latest = safety_review_service.get_latest_pack(connection, str(draft["id"]))
+    if latest is not None:
+        st.divider()
+        _render_pack_sections(latest)
+    st.divider()
+    if not permissions.can(user, permissions.PERMIT_CREATE):
+        st.caption("切换为作业申请人身份后，可将该作业复制为新草稿。")
+        return
+    if st.button("复制为新作业草稿", key=f"copy_confirmed_{draft['id']}"):
+        try:
+            created = safety_review_service.create_work_draft(
+                connection,
+                user=user,
+                title=str(draft.get("title") or ""),
+                work_type=str(draft.get("work_type") or ""),
+                description=str(draft.get("description") or ""),
+                location=str(draft.get("location") or ""),
+                planned_start=str(draft.get("planned_start") or ""),
+                planned_end=str(draft.get("planned_end") or ""),
+                people_count=int(draft.get("people_count") or 1),
+                responsible_person=str(draft.get("responsible_person") or ""),
+                contractor_involved=bool(draft.get("contractor_involved")),
+                work_steps=[str(item) for item in (draft.get("work_steps") or ())],
+                chemicals=[str(item) for item in (draft.get("chemicals") or ())],
+                user_risk_tags=[str(item) for item in (draft.get("user_risk_tags") or ())],
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"复制失败：{exc}")
+            return
+        open_draft(str(created["id"]))
+        common.set_flash(
+            f"已创建新作业草稿 {created['id']}；原记录 {draft['id']} 保持不变。"
+        )
+        st.rerun()
+    st.caption(
+        "新草稿不继承已确认状态与人工L/S确认结果，需重新完成资料准备、审核包生成与EHS确认。"
+    )
+
+
 def render_workspace(connection: sqlite3.Connection, user: Mapping[str, Any]) -> None:
     """Render the active four-step workflow or the new-draft first step."""
     draft = _active_draft(connection)
+    if draft is not None and str(draft.get("status")) == safety_review.STATUS_CONFIRMED:
+        header = st.columns([4, 1])
+        header[0].markdown(f"### {draft['id']} · 已确认（只读）")
+        if header[1].button("关闭", key="close_safety_review"):
+            close_workspace()
+            st.rerun()
+        _render_confirmed_readonly(connection, user, draft)
+        return
     step = int(st.session_state.get(STEP_KEY, 1))
     header = st.columns([4, 1])
     header[0].markdown("### 新建高风险作业 · 安全准备")
@@ -632,13 +804,28 @@ def render_workspace(connection: sqlite3.Connection, user: Mapping[str, Any]) ->
         _render_review(connection, user, draft)
 
 
+def _start_new_blank_draft() -> None:
+    """Primary entry: a brand-new blank WorkDraft straight into Step 1."""
+    st.session_state.pop(ACTIVE_DRAFT_KEY, None)
+    st.session_state[STEP_KEY] = 1
+    st.session_state[DEMO_PREFILL_KEY] = False
+    # Same flag as permits.CREATE_KEY (kept as literal to avoid a circular import):
+    # it opens the four-step workspace instead of the draft list.
+    st.session_state["_permit_create_open"] = True
+
+
 def render_draft_list(connection: sqlite3.Connection, user: Mapping[str, Any]) -> None:
     """Show preparation drafts above the unchanged formal Permit list."""
     drafts = safety_review_service.list_work_drafts(connection)
+    st.markdown("#### 高风险作业安全准备")
+    if permissions.can(user, permissions.PERMIT_CREATE) and st.button(
+        "+ 新建高风险作业", type="primary", key="start_new_work_draft_top"
+    ):
+        _start_new_blank_draft()
+        st.rerun()
     if not drafts:
         st.caption("暂无Safety Review Pack准备记录。")
         return
-    st.markdown("#### 高风险作业安全准备")
     for draft in drafts[:10]:
         columns = st.columns([1.2, 2.5, 1.3, 1.2])
         columns[0].markdown(f"**{draft['id']}**")

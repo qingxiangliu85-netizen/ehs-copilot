@@ -23,3 +23,8 @@
 - NIOSH / OSHA / NOAA 等政府公开资料仅可作交叉核对参考，不能替代 SDS，详见登记表；
 - 已建立的公开来源证据包见 `data/demo_evidence/`（逐字引用 + 来源链接，标注为「非 SDS」）；
 - 补齐来源后，需同步更新 `registered_demo_sds`、`.gitignore` 白名单与对应测试。
+
+> **P1 更新（2026-09-14）**：Safety Review Pack 的内置资料库见 `data/demo_documents/`
+> （真实 Methanol SDS + 未核验 HF 镜像 + 两份 Synthetic Demo SOP，来源与核验状态详见
+> `data/demo_documents/README.md`）。本目录的 Synthetic SDS 知识库仍是可选回退路径，
+> 演示金路径应优先使用 `data/demo_documents/` 中的真实 SDS。

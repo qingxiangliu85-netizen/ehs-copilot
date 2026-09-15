@@ -35,6 +35,7 @@ class SafetyReviewState(TypedDict, total=False):
     pack: dict[str, Any]
     missing_items: list[str]
     conflicts: list[dict[str, Any]]
+    conflict_note: str
     blockers: list[str]
     status: str
     errors: list[str]
@@ -139,11 +140,19 @@ def precheck_draft(
 
 
 def _query(draft: Mapping[str, Any], topic: str) -> str:
+    chemicals = [str(value) for value in (draft.get("chemicals") or ()) if str(value).strip()]
+    aliases = [
+        alias
+        for chemical in chemicals
+        for alias in evidence_adapter.chemical_aliases(chemical)
+        if alias not in chemicals
+    ]
     return " ".join(
         [
             str(draft.get("title", "")),
             str(draft.get("description", "")),
-            " ".join(str(value) for value in (draft.get("chemicals") or ())),
+            " ".join(chemicals),
+            " ".join(dict.fromkeys(aliases)),
             topic,
         ]
     ).strip()
@@ -175,6 +184,7 @@ def retrieve_evidence_node(state: SafetyReviewState) -> dict[str, Any]:
         *[(f"work_step/{index}", str(step)) for index, step in enumerate(draft.get("work_steps") or (), start=1)],
         *[(f"chemical/{index}", str(name)) for index, name in enumerate(draft.get("chemicals") or (), start=1)],
     ]
+    chemical_input_refs: list[str] = []
     for index, (locator, text) in enumerate(user_items, start=1):
         if not text.strip():
             continue
@@ -188,18 +198,29 @@ def retrieve_evidence_node(state: SafetyReviewState) -> dict[str, Any]:
             }
         )
         evidence[citation["evidence_id"]] = citation
+        if locator.startswith("chemical/"):
+            chemical_input_refs.append(citation["evidence_id"])
 
     sds_items = [item for item in evidence.values() if item["source_type"] == "sds"]
     match = evidence_adapter.sds_match_report(draft.get("chemicals") or (), sds_items)
     missing = list(state.get("missing_items") or ())
     if match["missing_chemicals"]:
         missing.append("缺少适用SDS：" + "、".join(match["missing_chemicals"]))
+    # Conflicts are only formed from real, citable evidence on both sides.
+    # With no SDS evidence at all the plain missing-item path above applies.
     conflicts = evidence_adapter.version_conflicts(current_context().resources)
+    conflicts.extend(
+        evidence_adapter.chemical_mismatch_conflicts(
+            draft.get("chemicals") or (), sds_items, input_refs=chemical_input_refs
+        )
+    )
+    conflict_note = evidence_adapter.unresolved_conflict_note(conflicts)
     return {
         "evidence": list(evidence.values()),
         "evidence_by_topic": topic_refs,
         "missing_items": list(dict.fromkeys(missing)),
         "conflicts": conflicts,
+        "conflict_note": conflict_note,
         "status": "evidence_retrieved",
     }
 
@@ -229,6 +250,11 @@ def _fallback_pack(state: SafetyReviewState) -> dict[str, Any]:
         safety_review.make_pack_item(tag, origin="user_input", evidence_refs=input_refs[:1])
         for tag in tags
     ]
+    sds_refs = [key for key, value in evidence.items() if value.get("source_type") == "sds"]
+    document_controls = [
+        key for key in refs.get("controls", [])
+        if evidence.get(key, {}).get("source_type") in {"sds", "sop", "internal"}
+    ]
     jsa_items = []
     for index, step in enumerate(draft.get("work_steps") or (), start=1):
         hazard = tags[min(index - 1, len(tags) - 1)] if tags else "待人工识别"
@@ -237,14 +263,11 @@ def _fallback_pack(state: SafetyReviewState) -> dict[str, Any]:
                 step_no=index,
                 work_step=str(step),
                 hazard=hazard,
-                evidence_refs=input_refs,
+                # Candidate hazards/controls bind the retrieved document evidence
+                # (never invented); EHS confirms wording and rates L/S by hand.
+                evidence_refs=[*input_refs, *document_controls],
             )
         )
-    sds_refs = [key for key, value in evidence.items() if value.get("source_type") == "sds"]
-    document_controls = [
-        key for key in refs.get("controls", [])
-        if evidence.get(key, {}).get("source_type") in {"sds", "sop", "internal"}
-    ]
     ppe_refs = [key for key in refs.get("ppe", []) if key in sds_refs]
     emergency_refs = [key for key in refs.get("emergency", []) if key in sds_refs]
     missing = list(state.get("missing_items") or ())
@@ -252,6 +275,14 @@ def _fallback_pack(state: SafetyReviewState) -> dict[str, Any]:
         missing.append("化学品相关PPE要求缺少匹配SDS证据")
     if draft.get("chemicals") and not emergency_refs:
         missing.append("化学品相关急救/泄漏/消防要求缺少匹配SDS证据")
+    # If the selected SDS does not cover the declared chemicals, its PPE and
+    # emergency sections must not be treated as reliable for this work.
+    mismatched = evidence_adapter.sds_match_report(
+        draft.get("chemicals") or (), [evidence[key] for key in sds_refs if key in evidence]
+    )["missing_chemicals"]
+    for chemical in mismatched:
+        missing.append(f"所选SDS与化学品「{chemical}」不匹配：PPE相关要求无法可靠确认")
+        missing.append(f"所选SDS与化学品「{chemical}」不匹配：急救/泄漏处置/消防要求无法可靠确认")
     if not document_controls:
         missing.append("关键控制措施缺少SDS、SOP或内部资料依据")
     return {
@@ -270,6 +301,7 @@ def _fallback_pack(state: SafetyReviewState) -> dict[str, Any]:
         "emergency_requirements": _evidence_items(emergency_refs, evidence),
         "missing_items": [safety_review.make_pack_item(value) for value in dict.fromkeys(missing)],
         "conflicts": list(state.get("conflicts") or ()),
+        "conflict_note": str(state.get("conflict_note") or ""),
         "evidence_insufficient": bool(missing),
         "human_confirmations": [
             "确认最终作业类型与风险标签",
@@ -281,9 +313,49 @@ def _fallback_pack(state: SafetyReviewState) -> dict[str, Any]:
     }
 
 
+def _validated_llm_conflicts(
+    candidate: Mapping[str, Any], valid_refs: set[str], evidence: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Accept only evidence-backed SDS-vs-SOP conflicts; never invent citations.
+
+    Every proposed conflict must cite at least one real SDS citation AND one real
+    SOP/internal citation that both exist in the retrieved evidence set.
+    """
+    validated: list[dict[str, Any]] = []
+    for item in candidate.get("conflicts") or ():
+        if not isinstance(item, Mapping):
+            continue
+        description = str(item.get("description") or item.get("text") or "").strip()
+        refs = [str(ref) for ref in (item.get("evidence_refs") or ()) if str(ref) in valid_refs]
+        if not description or not refs:
+            continue
+        has_sds = any(evidence.get(ref, {}).get("source_type") == "sds" for ref in refs)
+        has_sop = any(
+            evidence.get(ref, {}).get("source_type") in {"sop", "internal"} for ref in refs
+        )
+        if not (has_sds and has_sop):
+            continue
+        validated.append(
+            {
+                "conflict_id": f"CONF-LLM-{len(validated) + 1:02d}",
+                "kind": "sds_vs_sop",
+                "text": description,
+                "description": description,
+                "evidence_refs": list(dict.fromkeys(refs)),
+                "document_ids": [],
+                "versions": [],
+                "status": "unresolved",
+                "resolved": False,
+                "requires_human_resolution": True,
+            }
+        )
+    return validated
+
+
 def _safe_llm_pack(state: SafetyReviewState, fallback: dict[str, Any]) -> dict[str, Any]:
     if not is_llm_configured() or not current_context().use_llm:
         return fallback
+    evidence = {str(item.get("evidence_id")): item for item in state.get("evidence") or ()}
     payload = {
         "intake": state["intake"],
         "precheck": state.get("precheck", {}),
@@ -292,6 +364,12 @@ def _safe_llm_pack(state: SafetyReviewState, fallback: dict[str, Any]) -> dict[s
             "work_summary", "risk_findings", "jsa_draft", "controls", "ppe",
             "emergency_requirements", "missing_items", "conflicts", "evidence_insufficient"
         ],
+        "conflict_rule": (
+            "Only report a conflict when the provided citations themselves disagree on "
+            "the same safety requirement. Every conflict must cite at least one SDS "
+            "citation AND one SOP/internal citation from the provided citations. "
+            "If no such disagreement exists in the citations, return an empty list."
+        ),
         "prohibited_fields": [
             "likelihood", "severity", "residual_likelihood", "residual_severity"
         ],
@@ -303,7 +381,7 @@ def _safe_llm_pack(state: SafetyReviewState, fallback: dict[str, Any]) -> dict[s
         )
     except Exception:
         return fallback
-    valid_refs = {str(item.get("evidence_id")) for item in state.get("evidence") or ()}
+    valid_refs = set(evidence)
     result = dict(fallback)
     result["work_summary"] = str(candidate.get("work_summary") or fallback["work_summary"])
     for section in ("risk_findings", "controls", "ppe", "emergency_requirements"):
@@ -336,6 +414,22 @@ def _safe_llm_pack(state: SafetyReviewState, fallback: dict[str, Any]) -> dict[s
         )
     if cleaned_jsa:
         result["jsa_draft"] = cleaned_jsa
+    # Deterministic conflicts always win; LLM may only add citation-backed
+    # SDS-vs-SOP disagreements on top. Without evidence, no conflict is formed.
+    deterministic = list(result.get("conflicts") or ())
+    llm_conflicts = _validated_llm_conflicts(candidate, valid_refs, evidence)
+    if llm_conflicts or "conflicts" in candidate:
+        seen = {
+            str(item.get("description"))
+            for item in deterministic
+            if isinstance(item, Mapping)
+        }
+        result["conflicts"] = deterministic + [
+            item for item in llm_conflicts if item["description"] not in seen
+        ]
+    result["conflict_note"] = evidence_adapter.unresolved_conflict_note(
+        result.get("conflicts") or ()
+    )
     return result
 
 

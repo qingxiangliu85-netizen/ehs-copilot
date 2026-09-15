@@ -288,10 +288,7 @@ def _render_create_form(connection: sqlite3.Connection, user: Mapping[str, Any])
 def render_list(connection: sqlite3.Connection, user: Mapping[str, Any]) -> None:
     """Render the 作业许可 list page."""
     st.title("作业许可")
-    st.caption(
-        "高风险非例行作业许可的申请、EHS审核、审批、开工作业与闭环"
-        "（Demo 覆盖危化品 / 动火 / 受限空间 / 电气隔离 / 高处 / 开挖）"
-    )
+    st.caption("高风险作业安全准备与正式作业许可")
 
     can_create = permissions.can(user, permissions.PERMIT_CREATE)
     toolbar = st.columns([1.2, 3.8])

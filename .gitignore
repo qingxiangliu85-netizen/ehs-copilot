@@ -41,11 +41,17 @@ desktop.ini
 *.bak
 tmp/
 
+# WorkBuddy assistant workspace (session logs, browser-verification scripts)
+.workbuddy/
+
 # Local uploads, SDS files and generated indexes
 uploads/
 data/demo_sds/*.pdf
 data/demo_sds/*.PDF
 !data/demo_sds/EHS_Copilot_Demo_Synthetic_SDS.pdf
+# Demo documents: 厂商SDS PDF只保留在本地（版权约束，禁止入仓）；SOP与registry为自有内容
+data/demo_documents/*.pdf
+data/demo_documents/*.PDF
 data/faiss_index/*
 !data/faiss_index/.gitkeep
 *.faiss
