@@ -147,6 +147,18 @@ def _canonical_risk_level(value: Any) -> str:
     return text
 
 
+def _dedup_segments(text: str) -> str:
+    """Join control measures without repeating identical segments."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for part in str(text).split("；"):
+        part = part.strip()
+        if part and part not in seen:
+            seen.add(part)
+            ordered.append(part)
+    return "；".join(ordered)
+
+
 def _normalise_jsa_item(item: Mapping[str, Any], index: int) -> dict[str, Any]:
     row = dict(item)
     try:
@@ -445,7 +457,7 @@ def create_permit(
             str(row.get("proposed_controls", "") or row.get("existing_controls", ""))
             for row in jsa_rows
         ]
-        control_measures = "；".join(part for part in parts if part)
+        control_measures = _dedup_segments("；".join(part for part in parts if part))
 
     label = str(data_label or "").strip()
     demo = legacy_adapter.is_demo_label(label) if is_demo is None else bool(is_demo)

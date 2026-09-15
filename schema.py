@@ -238,6 +238,19 @@ DDL_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (pack_id, version)
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS permit_sources (
+        permit_id TEXT PRIMARY KEY REFERENCES permits(id) ON DELETE CASCADE,
+        draft_id TEXT NOT NULL,
+        pack_id TEXT NOT NULL,
+        pack_version INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL DEFAULT '{}',
+        confirmed_by TEXT NOT NULL DEFAULT '',
+        confirmed_at TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+    );
+    """,
     "CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_events (entity_type, entity_id, created_at);",
     "CREATE INDEX IF NOT EXISTS idx_audit_correlation ON audit_events (correlation_id);",
     "CREATE INDEX IF NOT EXISTS idx_permits_status ON permits (status);",
@@ -247,6 +260,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_hazards_owner ON hazards (owner_id, status);",
     "CREATE INDEX IF NOT EXISTS idx_work_drafts_status ON work_drafts (status, updated_at);",
     "CREATE INDEX IF NOT EXISTS idx_review_packs_draft ON safety_review_packs (draft_id, version);",
+    "CREATE INDEX IF NOT EXISTS idx_permit_sources_draft ON permit_sources (draft_id);",
 )
 
 EXPECTED_TABLES: tuple[str, ...] = (
@@ -264,6 +278,7 @@ EXPECTED_TABLES: tuple[str, ...] = (
     "audit_events",
     "work_drafts",
     "safety_review_packs",
+    "permit_sources",
 )
 
 

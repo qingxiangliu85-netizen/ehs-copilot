@@ -10,7 +10,7 @@ import streamlit as st
 
 import evidence_adapter
 import safety_review
-from services import safety_review_service
+from services import permit_service, safety_review_service
 from workflow import permissions
 from workflow.safety_review_graph import (
     SafetyReviewContext,
@@ -739,6 +739,8 @@ def _render_confirmed_readonly(
         st.divider()
         _render_pack_sections(latest)
     st.divider()
+    _render_permit_link_section(connection, user, draft)
+    st.divider()
     if not permissions.can(user, permissions.PERMIT_CREATE):
         st.caption("切换为作业申请人身份后，可将该作业复制为新草稿。")
         return
@@ -770,6 +772,87 @@ def _render_confirmed_readonly(
         st.rerun()
     st.caption(
         "新草稿不继承已确认状态与人工L/S确认结果，需重新完成资料准备、审核包生成与EHS确认。"
+    )
+
+
+PERMIT_ERROR_KEY = "_safety_review_permit_error"
+
+
+def _open_pack_permit(permit_id: str, created: bool) -> None:
+    """Callback: leave the workspace and open the permit detail.
+
+    Widget-bound session keys (the nav radio) may only be written inside a
+    callback, which runs before the widgets are instantiated on the rerun.
+    """
+    close_workspace()
+    if created:
+        common.set_flash(
+            f"已创建正式作业许可 {permit_id}（草稿）。Pack确认不等于Permit批准，"
+            "请继续完成EHS审核与审批流程。"
+        )
+    common.open_detail(common.PAGE_PERMITS, "permit", permit_id)
+
+
+def _create_permit_from_pack_callback(draft_id: str) -> None:
+    """Callback: create the formal Permit from the confirmed pack.
+
+    Callbacks run before the page's own connection is opened, so this opens
+    its own short-lived store connection.
+    """
+    with common.database() as connection:
+        user = common.current_user(connection)
+        try:
+            outcome = safety_review_service.create_permit_from_pack(
+                connection, draft_id, user=user, now=common.now()
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            st.session_state[PERMIT_ERROR_KEY] = f"创建失败：{exc}"
+            return
+        permit_id = str(outcome["permit"]["id"])
+        created = bool(outcome["created"])
+    st.session_state.pop(PERMIT_ERROR_KEY, None)
+    _open_pack_permit(permit_id, created=created)
+
+
+def _render_permit_link_section(
+    connection: sqlite3.Connection,
+    user: Mapping[str, Any],
+    draft: Mapping[str, Any],
+) -> None:
+    """Confirmed pack → formal Permit: the Phase 2 hand-over point."""
+    st.markdown("#### 转入正式作业许可")
+    st.caption("审核包已确认 → 创建正式作业许可 → 进入现有审核/审批/开工/执行流程。")
+    error_message = st.session_state.pop(PERMIT_ERROR_KEY, None)
+    if error_message:
+        st.error(error_message)
+    link = safety_review_service.get_pack_permit_link(connection, str(draft["id"]))
+    if link is not None:
+        permit = permit_service.get_permit(connection, str(link["permit_id"]))
+        status_label = (
+            common.permit_status_label(permit.get("status"))
+            if permit is not None
+            else "未知"
+        )
+        st.success(
+            f"该审核包已创建正式作业许可 **{link['permit_id']}**（当前状态：{status_label}）。"
+            "一个审核包只对应一个正式许可，不会重复创建。"
+        )
+        st.button(
+            f"打开正式作业许可 {link['permit_id']}",
+            key=f"open_permit_{draft['id']}",
+            on_click=_open_pack_permit,
+            args=(str(link["permit_id"]), False),
+        )
+        return
+    if not permissions.can(user, permissions.PERMIT_CREATE):
+        st.caption("切换为作业申请人身份后，可将该确认结果转入正式作业许可。")
+        return
+    st.button(
+        "创建正式作业许可",
+        type="primary",
+        key=f"create_permit_{draft['id']}",
+        on_click=_create_permit_from_pack_callback,
+        args=(str(draft["id"]),),
     )
 
 

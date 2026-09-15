@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 
 import streamlit as st
 
-from services import permit_service, persona_service
+from services import permit_service, persona_service, safety_review_service
 from workflow import audit, permit_state, permissions, roles, sla
 from workflow import actions as workflow_actions
 
@@ -300,9 +300,8 @@ def render_list(connection: sqlite3.Connection, user: Mapping[str, Any]) -> None
             safety_review_ui.close_workspace()
     if can_create:
         toolbar[1].caption(
-            f"当前身份 {common.persona_label(user)} 可先生成并确认Safety Review Pack；Phase 1不创建正式Permit。"
-            if can_create
-            else ""
+            f"当前身份 {common.persona_label(user)}：完成Safety Review Pack确认后，"
+            "可将其转入正式作业许可（初始为草稿，仍须走完审核与审批）。"
         )
 
     active_draft = bool(st.session_state.get(safety_review_ui.ACTIVE_DRAFT_KEY))
@@ -319,7 +318,7 @@ def render_list(connection: sqlite3.Connection, user: Mapping[str, Any]) -> None
     ]
     permits = [permit for permit in permits if permit is not None]
     st.markdown("#### 正式作业许可")
-    st.caption("以下为既有Permit后半链路；Phase 1确认审核包后不会自动新增这里的记录。")
+    st.caption("已确认审核包转入的许可从这里进入 EHS审核 → 审批 → 开工 → 执行 → 关闭 流程。")
 
     if not permits:
         widgets.empty_state("暂无作业许可记录。")
@@ -634,9 +633,23 @@ def _render_action_area(
         st.rerun()
 
 
+# Sections whose content can already exist before the stage officially starts
+# (inherited from a confirmed Safety Review Pack); existing data is shown
+# instead of the "not started yet" placeholder.
+_SECTION_DATA_KEYS = {
+    "chemicals": "chemicals",
+    "jsa": "jsa_items",
+}
+
+
 def _section_is_future(permit: Mapping[str, Any], key: str) -> bool:
     stage = _SECTION_STAGE.get(key, 99)
-    return stage > common.permit_stage_index(permit.get("status"))
+    if stage <= common.permit_stage_index(permit.get("status")):
+        return False
+    data_key = _SECTION_DATA_KEYS.get(key)
+    if data_key and list(permit.get(data_key) or ()):
+        return False
+    return True
 
 
 def _render_chemicals(connection: sqlite3.Connection, permit: Mapping[str, Any]) -> None:
@@ -998,6 +1011,47 @@ def _render_linked_hazards(
         )
 
 
+def _render_pack_source(
+    connection: sqlite3.Connection, permit: Mapping[str, Any]
+) -> None:
+    """Lightweight provenance section: which confirmed pack created this permit."""
+    source = safety_review_service.get_permit_source(
+        connection, str(permit.get("id", ""))
+    )
+    if source is None:
+        return
+    draft_id = str(source.get("draft_id") or "—")
+    pack_id = str(source.get("pack_id") or "—")
+    version = int(source.get("pack_version") or 0)
+    snapshot = source.get("snapshot") or {}
+    tags = "、".join(str(item) for item in (snapshot.get("confirmed_risk_tags") or ()))
+    with st.expander("安全准备来源", expanded=False):
+        widgets.key_values(
+            [
+                ("作业准备草稿", draft_id),
+                ("Safety Review Pack", f"{pack_id} · v{version}"),
+                ("EHS确认人", common.user_name(connection, str(source.get("confirmed_by") or ""))),
+                ("EHS确认时间", common.short_datetime(source.get("confirmed_at"))),
+                ("确认风险标签", tags or "—"),
+                ("正式许可状态", common.permit_status_label(permit.get("status"))),
+            ]
+        )
+        st.caption(
+            "已确认的JSA与SDS/SOP证据随该来源冻结；本许可仍须走完整的审核与审批流程。"
+        )
+        def _open_source_draft(draft_id: str = draft_id) -> None:
+            # Widget-bound nav keys may only be written inside a callback.
+            safety_review_ui.open_draft(draft_id)
+            st.session_state[CREATE_KEY] = False
+            common.close_detail(common.PAGE_PERMITS)
+
+        st.button(
+            "打开作业准备记录",
+            key=f"open_source_draft_{permit.get('id', '')}",
+            on_click=_open_source_draft,
+        )
+
+
 def render_detail(
     connection: sqlite3.Connection,
     user: Mapping[str, Any],
@@ -1019,6 +1073,8 @@ def render_detail(
     st.divider()
     product.render_flow_strip(permit)
     product.render_role_hint(permit, user)
+    st.divider()
+    _render_pack_source(connection, permit)
     st.divider()
     _render_action_area(connection, permit, user)
 
